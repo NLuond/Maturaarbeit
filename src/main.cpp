@@ -6,20 +6,17 @@
 #include "MadgwickAHRS.h"
 #include "VibrationEnvelope.h"
 
-ImuReader          imu;
-MouseHID           mouse;
+ImuReader imu;
+MouseHID mouse;
 AirMouseController app(mouse);
 uint32_t prev_us = 0;
 
 void setup() {
     Serial.begin(115200);
+    imu.begin();
 #if !COLLECT_MODE
     mouse.begin();
-    imu.begin();
     app.begin();
-    while (!mouse.ready()) delay(1);
-#else
-    imu.begin();
 #endif
     prev_us = micros();
 }
@@ -34,7 +31,7 @@ void loop() {
 
 #if COLLECT_MODE
     static uint32_t lastSample_us = 0;
-    static MadgwickAHRS  ahrsC(cfg::MADGWICK_BETA);
+    static MadgwickAHRS ahrsC(cfg::MADGWICK_BETA);
     static VibrationEnvelope envC;
 
     ahrsC.update(s.gx, s.gy, s.gz, s.ax, s.ay, s.az, dt);

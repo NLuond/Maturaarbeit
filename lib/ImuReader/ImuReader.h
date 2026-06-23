@@ -6,7 +6,7 @@
 struct ImuSample {
     float ax, ay, az, gx, gy, gz;
     float accMag;
-    float gyroSum;   // |gx|+|gy|+|gz|
+    float gyroSum;
 };
 
 class ImuReader {

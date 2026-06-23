@@ -8,7 +8,7 @@
 #include "PinchDetector.h"
 #include "OrientationPointer.h"
 #include "ShakeToggle.h"
-#include "Haptic.h"                       // <-- korrekt geschrieben
+#include "Haptic.h"
 
 class AirMouseController {
 public:
@@ -35,7 +35,7 @@ public:
             return;
         }
 
-        handleClick(env, s.gyroSum, now_ms);
+        handleClick(s, env, now_ms);
         handlePointing(s, dt, now_us, now_ms);
         debug(env, s.gyroSum, now_us);
     }
@@ -47,15 +47,14 @@ private:
     PinchDetector      pinch_;
     OrientationPointer pointer_;
     ShakeToggle        shaker_;
-    Haptic             haptic_;           // <-- jetzt Member, wie die anderen
+    Haptic             haptic_;
 
     bool     airmouseOn_ = false;
     float    accumX_ = 0.f, accumY_ = 0.f;
     uint32_t lastMove_ = 0, lastDbg_ = 0;
 
-    void handleClick(float env, float gyroSum, uint32_t now_ms) {
-        bool mlPinch = false;
-        if (pinch_.tick(env, gyroSum, mlPinch, now_ms)) {
+    void handleClick(const ImuSample& s, float env, uint32_t now_ms) {
+        if (pinch_.tick(env, s.gyroSum, s.ax, s.ay, s.az, now_ms)) {
             mouse_.click();
             haptic_.trigger(now_ms);
         }
@@ -78,9 +77,6 @@ private:
     #if DEBUG_TELEPLOT
         if (now_us - lastDbg_ < 8000) return;
         lastDbg_ = now_us;
-        Serial.print(">env:");     Serial.println(env, 4);
-        Serial.print(">gyroSum:"); Serial.println(gyroSum, 1);
-        Serial.print(">on:");      Serial.println(airmouseOn_ ? 1 : 0);
     #endif
     }
 };

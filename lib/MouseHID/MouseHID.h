@@ -11,7 +11,7 @@ class MouseHID {
 public:
     void begin() {
         Bluefruit.begin();
-        Bluefruit.setName("Maturaarbeit Nils Lüönd");
+        Bluefruit.setName("Maturaarbeit Nils Luond");
         Bluefruit.setTxPower(4);
 
         bledis.setManufacturer("Nils");
