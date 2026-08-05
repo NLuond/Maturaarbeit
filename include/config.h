@@ -51,6 +51,12 @@ namespace cfg {
     constexpr int GYRO_RANGE_DPS = 500;
     constexpr int GYRO_ODR_HZ    = 208;
 
+    // Der LSM6DS3 kann 400 kHz. Bei sechs Werten je Takt ist das der
+    // Unterschied zwischen rund 2 ms und rund 0.5 ms Schleifenzeit - gesetzt
+    // wird die Rate erst nach imu_.begin(), weil Wire.begin() sie dort auf die
+    // Arduino-Vorgabe von 100 kHz zuruecksetzt.
+    constexpr uint32_t I2C_CLOCK_HZ = 400000;
+
     // Feste Schrittweite der ganzen Verarbeitung. Muss zur Abtastrate des
     // Modells passen (209 Hz), sonst sieht der Klassifikator ein zeitlich
     // gestauchtes Fenster. PinchDetector prueft das beim Kompilieren.

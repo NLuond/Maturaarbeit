@@ -18,11 +18,9 @@ public:
         imu_.settings.gyroSampleRate  = cfg::GYRO_ODR_HZ;
         imu_.begin();
 
-        // Muss NACH imu_.begin() stehen: dort laeuft Wire.begin(), und das
-        // setzt die Taktrate auf die Arduino-Vorgabe von 100 kHz zurueck.
-        // Der LSM6DS3 kann 400 kHz - bei sechs Werten je Takt ist das der
-        // Unterschied zwischen rund 2 ms und rund 0.5 ms Schleifenzeit.
-        Wire.setClock(400000);
+        // Muss NACH imu_.begin() stehen: dort laeuft Wire.begin() und setzt
+        // die Taktrate zurueck. Begruendung des Werts bei cfg::I2C_CLOCK_HZ.
+        Wire.setClock(cfg::I2C_CLOCK_HZ);
     }
 
     ImuSample read(float dt) {
