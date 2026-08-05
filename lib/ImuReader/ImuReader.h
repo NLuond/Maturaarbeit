@@ -1,5 +1,6 @@
 #pragma once
 #include <LSM6DS3.h>
+#include <Wire.h>
 #include <math.h>
 #include "config.h"
 #include "ImuSample.h"
@@ -16,17 +17,40 @@ public:
         imu_.settings.gyroRange       = cfg::GYRO_RANGE_DPS;
         imu_.settings.gyroSampleRate  = cfg::GYRO_ODR_HZ;
         imu_.begin();
+
+        // Muss NACH imu_.begin() stehen: dort laeuft Wire.begin(), und das
+        // setzt die Taktrate auf die Arduino-Vorgabe von 100 kHz zurueck.
+        // Der LSM6DS3 kann 400 kHz - bei sechs Werten je Takt ist das der
+        // Unterschied zwischen rund 2 ms und rund 0.5 ms Schleifenzeit.
+        Wire.setClock(400000);
     }
 
     ImuSample read(float dt) {
-        const float rawX = imu_.readFloatGyroX();
-        const float rawY = imu_.readFloatGyroY();
-        const float rawZ = imu_.readFloatGyroZ();
+        // Ein Burst statt sechs Einzeltransaktionen. Ab OUTX_L_G (0x22) folgen
+        // luecklos Gyro X/Y/Z und Accel X/Y/Z, je zwei Bytes little-endian -
+        // 0x28 (OUTX_L_XL) liegt genau hinter dem Gyro-Block. Neben der
+        // gesparten Zeit hat das einen zweiten Vorteil: alle sechs Werte
+        // stammen aus demselben Abtastzeitpunkt. Bei Einzelzugriffen lagen
+        // zwischen dem ersten und dem letzten rund 2 ms, in denen sich die
+        // Hand weiterbewegt hat.
+        uint8_t raw[12];
+        imu_.readRegisterRegion(raw, LSM6DS3_ACC_GYRO_OUTX_L_G, 12);
+
+        const int16_t gxi = (int16_t)((uint16_t)raw[1]  << 8 | raw[0]);
+        const int16_t gyi = (int16_t)((uint16_t)raw[3]  << 8 | raw[2]);
+        const int16_t gzi = (int16_t)((uint16_t)raw[5]  << 8 | raw[4]);
+        const int16_t axi = (int16_t)((uint16_t)raw[7]  << 8 | raw[6]);
+        const int16_t ayi = (int16_t)((uint16_t)raw[9]  << 8 | raw[8]);
+        const int16_t azi = (int16_t)((uint16_t)raw[11] << 8 | raw[10]);
+
+        const float rawX = imu_.calcGyro(gxi);
+        const float rawY = imu_.calcGyro(gyi);
+        const float rawZ = imu_.calcGyro(gzi);
 
         ImuSample s;
-        s.ax = imu_.readFloatAccelX();
-        s.ay = imu_.readFloatAccelY();
-        s.az = imu_.readFloatAccelZ();
+        s.ax = imu_.calcAccel(axi);
+        s.ay = imu_.calcAccel(ayi);
+        s.az = imu_.calcAccel(azi);
 
         // Erdbeschleunigung schaetzen und abziehen. Eine gehaltene Haltung
         // aendert sich im Bereich unter 1 Hz, die Beschleunigung beim Zeigen
