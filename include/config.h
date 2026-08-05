@@ -96,7 +96,13 @@ namespace cfg {
     constexpr float ENV_OFF = 0.020f;
 
     constexpr float    PINCH_GYRO_GUARD = 100.f;
-    constexpr uint32_t FREEZE_MS        = 120;
+
+    // Obergrenze fuer das Einfrieren des Cursors nach einem Klick. Frueher war
+    // das eine feste Zeit von 120 ms - der Cursor stand also nach jedem Klick,
+    // auch wenn die Erschuetterung laengst vorbei war. Jetzt friert er nur,
+    // solange das env-Gate offen ist; diese Zahl ist nur noch die Notbremse
+    // fuer den Fall, dass das Gate haengt.
+    constexpr uint32_t FREEZE_MAX_MS = 60;
 
     constexpr uint32_t DEBOUNCE_MS = 180;
 

@@ -37,7 +37,12 @@ public:
         return fired;
     }
 
-    bool inFreeze(uint32_t now) const { return (now - tLastPinch_) < cfg::FREEZE_MS; }
+    // Der Zeiger ruht, solange die Erschuetterung des Pinches anliegt - nicht
+    // eine feste Zeit lang. Ein kurzer, sauberer Pinch gibt den Cursor damit
+    // sofort wieder frei, statt ihn pauschal auszubremsen.
+    bool inFreeze(uint32_t now) const {
+        return envGate_ && (now - tLastPinch_) < cfg::FREEZE_MAX_MS;
+    }
 
     bool envGate() const { return envGate_; }
 
