@@ -18,11 +18,15 @@
 //
 // Uebergangstabelle:
 //
-//   Ereignis | Off    | On/Point       | On/Idle        | On/Turned
-//   ---------|--------|----------------|----------------|----------------
-//   Shake    | -> On  | -> Off         | -> Off         | -> Off
-//   Pose     | ignor. | Zeiger zurueck | ggf. Wechsel   | Scroll-Start
-//   Pinch    | ignor. | Linksklick     | Rechtsklick    | ignoriert
+//   Ereignis   | Off    | On/Point       | On/Idle        | On/Turned
+//   -----------|--------|----------------|----------------|----------------
+//   onPower    | -> On  | -> Off         | -> Off         | -> Off
+//   onPose     | ignor. | Zeiger zurueck | ggf. Wechsel   | ggf. Wechsel
+//   onTwistHeld| ignor. | ignor.         | ignor.         | Scroll-Start
+//   onPinch    | ignor. | Linksklick     | ignoriert      | Rechtsklick*
+//
+//   * nur wenn die Armneigung ruhig steht (scrollIdle) - wer gerade den
+//     Scroll-Joystick bewegt, bekommt keinen Klick mitten in den Ausschlag.
 //
 // Der Automat fuehrt selbst nichts aus. Er meldet ueber Actions zurueck, was zu
 // tun ist, und der Aufrufer erledigt es. Damit haengt er an keiner Hardware,
@@ -42,29 +46,37 @@ enum class Power : uint8_t { Off, On };
 enum class Pose  : uint8_t { Point, Idle, Turned };
 
 struct Actions {
-    bool click         = false;  // links
-    bool rightClick    = false;
-    bool haptic        = false;
-    bool resetPointer  = false;
-    bool enterScroll   = false;  // Scroll-Joystick auf aktuelle Neigung nullen
-    bool resetPose     = false;  // Haltungserkennung auf Point zuruecksetzen
+    bool click        = false;  // links
+    bool rightClick   = false;
+    bool resetPointer = false;
+    bool enterScroll  = false;  // Scroll-Joystick auf aktuelle Neigung nullen
+    bool resetPose    = false;  // Haltungserkennung auf Point zuruecksetzen
+
+    // 0 = still, 1 = Linksklick / Haltungswechsel / Ein-Aus, 2 = Rechtsklick.
+    // Der Rechtsklick ist an der Hand sonst nicht vom Linksklick zu
+    // unterscheiden - und er passiert in einer Haltung, in der man den Cursor
+    // nicht sieht.
+    uint8_t hapticPulses = 0;
 };
 
 class AirMouseState {
 public:
-    Actions onShake() {
+    // Die Drehgeste hat vollstaendig durchgelaufen (TwistEvent::Toggle).
+    Actions onPower() {
         Actions a;
         if (power_ == Power::Off) {
             power_ = Power::On;
             pose_  = Pose::Point;
+            scrollOn_      = false;
             a.resetPose    = true;
             a.resetPointer = true;
-            a.haptic       = true;
+            a.hapticPulses = 1;
             return a;
         }
-        power_ = Power::Off;
+        power_    = Power::Off;
+        scrollOn_ = false;
         a.resetPointer = true;
-        a.haptic       = true;
+        a.hapticPulses = 1;
         return a;
     }
 
@@ -72,30 +84,52 @@ public:
         Actions a;
         if (power_ != Power::On || next == pose_) return a;
 
-        if (pose_ == Pose::Point) a.resetPointer = true;   // verlassen
+        if (pose_ == Pose::Point)  a.resetPointer = true;   // verlassen
+        if (pose_ == Pose::Turned) scrollOn_ = false;       // Joystick aus
+
         pose_ = next;
 
-        switch (next) {                                    // betreten
-            case Pose::Turned: a.enterScroll  = true; a.haptic = true; break;
-            case Pose::Point:  a.resetPointer = true; a.haptic = true; break;
+        switch (next) {                                     // betreten
+            // Turned schaltet den Joystick NICHT zu - das macht erst
+            // onTwistHeld() nach einer Sekunde. Sonst wuerde jede Ein/Aus-Geste
+            // nebenbei ein Stueck weit scrollen.
+            case Pose::Turned: a.hapticPulses = 1; break;
+            case Pose::Point:  a.resetPointer = true; a.hapticPulses = 1; break;
             // Idle bleibt bewusst still, sonst brummt es zweimal auf dem Weg
-            // vom Zeigen in die Scroll-Haltung.
+            // vom Zeigen in die abgedrehte Haltung.
             case Pose::Idle:   break;
         }
         return a;
     }
 
-    // Die Haltung entscheidet ueber die Taste. In der Scroll-Haltung bleibt der
-    // Pinch wirkungslos: dort ist die Hand mit Scrollen beschaeftigt, und ein
-    // Klick mitten im Lauf waere fuer den Nutzer nicht vorhersehbar.
-    Actions onPinch() {
+    // Die Ausdrehung wurde laenger als das Schaltfenster gehalten: aus der
+    // Ein/Aus-Geste ist der Scroll-Modus geworden.
+    Actions onTwistHeld() {
+        Actions a;
+        if (power_ != Power::On || pose_ != Pose::Turned || scrollOn_) return a;
+        scrollOn_      = true;
+        a.enterScroll  = true;
+        a.hapticPulses = 1;
+        return a;
+    }
+
+    // Die Haltung entscheidet ueber die Taste. scrollIdle sagt, ob die
+    // Armneigung in der Totzone des Joysticks steht - wer gerade scrollt,
+    // kippt den Arm, und ein Klick mitten im Lauf waere fuer den Nutzer nicht
+    // vorhersehbar.
+    Actions onPinch(bool scrollIdle) {
         Actions a;
         if (power_ != Power::On) return a;
 
         switch (pose_) {
-            case Pose::Point: a.click      = true; a.haptic = true; break;
-            case Pose::Idle:  a.rightClick = true; a.haptic = true; break;
-            case Pose::Turned: break;
+            case Pose::Point:
+                a.click = true; a.hapticPulses = 1;
+                break;
+            case Pose::Turned:
+                if (scrollIdle) { a.rightClick = true; a.hapticPulses = 2; }
+                break;
+            case Pose::Idle:
+                break;
         }
         return a;
     }
@@ -105,9 +139,10 @@ public:
 
     bool on()        const { return power_ == Power::On; }
     bool pointing()  const { return power_ == Power::On && pose_ == Pose::Point; }
-    bool scrolling() const { return power_ == Power::On && pose_ == Pose::Turned; }
+    bool scrolling() const { return power_ == Power::On && pose_ == Pose::Turned && scrollOn_; }
 
 private:
-    Power power_ = Power::Off;
-    Pose  pose_  = Pose::Point;
+    Power power_    = Power::Off;
+    Pose  pose_     = Pose::Point;
+    bool  scrollOn_ = false;
 };

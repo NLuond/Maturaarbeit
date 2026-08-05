@@ -12,7 +12,7 @@
 #include "AirMouseState.h"
 #include "PoseDetector.h"
 #include "ScrollJoystick.h"
-#include "ShakeToggle.h"
+#include "TwistToggle.h"
 #include "Haptic.h"
 #include "LowPass.h"
 #include "ArmOrientation.h"
@@ -20,7 +20,7 @@
 
 // Bindeglied zwischen Sensorik und Zustandsautomat. Die Aufgabenteilung:
 //
-//   Erkenner (ShakeToggle, PoseDetector, PinchDetector/-Gesture) machen aus
+//   Erkenner (TwistToggle, PoseDetector, PinchDetector/-Gesture) machen aus
 //   Messwerten Ereignisse.
 //   AirMouseState entscheidet allein, was diese Ereignisse bedeuten, und
 //   liefert die auszufuehrenden Aktionen zurueck.
@@ -28,8 +28,8 @@
 //   (Cursor bewegen, scrollen) passend zum Zustand.
 //
 // Kein Zustandsbit liegt ausserhalb von AirMouseState. Das war vorher anders -
-// airmouseOn_, lastMode_ und dragging_ lagen hier verstreut und mussten von
-// Hand synchron gehalten werden.
+// airmouseOn_ und lastMode_ lagen hier verstreut und mussten von Hand
+// synchron gehalten werden.
 class AirMouseController {
 public:
     explicit AirMouseController(MouseHID& mouse)
@@ -65,17 +65,26 @@ public:
         twistGain_ = twistGuard_.update(twist_, dt);
 
         // --- Ereignisse einsammeln und dem Automaten geben ---------------
-        if (shaker_.tick(s.gyroSum, now_ms)) apply(fsm_.onShake(), now_ms);
-
-        // Der Haltungs-Detektor laeuft immer, auch im Ruhezustand. Zwei Gruende:
-        // seine Glaettung (MODE_TAU) ist beim Einschalten dann schon
-        // eingeschwungen statt bei null, und die Teleplot-Kanaele bleiben
-        // aussagekraeftig. Vorher stand er im on()-Block und fror im
-        // Ruhezustand ein - ein stehender Wert sieht dann aus wie ein
-        // haengender Winkel und nicht wie "laeuft gerade nicht".
-        // Anders als beim Klassifikator kostet das nichts: ein paar Additionen,
-        // keine Inferenz.
+        // Der Haltungs-Detektor laeuft immer, auch im Ruhezustand: seine
+        // Glaettung ist beim Einschalten dann schon eingeschwungen statt bei
+        // null, und die Drehgeste braucht den geglaetteten Winkel gerade dann,
+        // wenn die Maus noch aus ist.
         const Pose posed = pose_.update(twist_, elev_, s.gyroSum, dt, now_ms);
+
+        // Eine Erschuetterung ueber der env-Schwelle verbraucht die laufende
+        // Ausdrehung: sie war ein Pinch und keine Schaltgeste. Absichtlich an
+        // der Schwelle und nicht am erkannten Klick - verpasst der
+        // Klassifikator den Pinch, wuerde das Zurueckdrehen sonst die Maus
+        // abschalten statt rechtszuklicken. Nur im eingeschalteten Zustand:
+        // dort laeuft der Pinch-Pfad, und eine Erschuetterung soll die
+        // Einschalt-Geste nicht abbrechen.
+        if (fsm_.on() && env > cfg::ENV_ON) twistToggle_.cancel();
+
+        switch (twistToggle_.tick(pose_.relTwistDeg(), pose_.level(), now_ms)) {
+            case TwistEvent::Toggle: apply(fsm_.onPower(),     now_ms); break;
+            case TwistEvent::Held:   apply(fsm_.onTwistHeld(), now_ms); break;
+            case TwistEvent::None:   break;
+        }
 
         if (fsm_.on()) {
             // Haltung vor Pinch: welche Taste ein Pinch ausloest, haengt an der
@@ -112,7 +121,7 @@ private:
     AirMouseState      fsm_;
     PoseDetector       pose_;
     ScrollJoystick     scroll_;
-    ShakeToggle        shaker_;
+    TwistToggle        twistToggle_;
     Haptic             haptic_;
     TwistGuard         twistGuard_;
 
@@ -145,7 +154,7 @@ private:
         if (a.resetPose)     pose_.reset();
         if (a.enterScroll)   scroll_.enter(elev_);
         if (a.resetPointer) { accumX_ = accumY_ = 0.f; pointer_.reset(); twistGuard_.reset(); }
-        if (a.haptic)        haptic_.trigger(now_ms);
+        if (a.hapticPulses)  haptic_.trigger(now_ms, a.hapticPulses);
     }
 
     // Der Klassifikator laeuft nur im eingeschalteten Zustand. Ihn auch im
@@ -165,7 +174,7 @@ private:
         const bool pinched = pinch_.tick(env, s.gyroSum, now_ms,
                                          [this] { return ml_.ready() && ml_.isPinch(); });
 
-        if (pinched) apply(fsm_.onPinch(), now_ms);
+        if (pinched) apply(fsm_.onPinch(scroll_.inDeadzone()), now_ms);
     }
 
     void handlePointing(const ImuSample& s, float dt, uint32_t now_us) {
@@ -234,6 +243,10 @@ private:
         Serial.print(">on:");     Serial.println(fsm_.on() ? 1 : 0);
         Serial.print(">pose:");   Serial.println((int)fsm_.pose());
         Serial.print(">dpose:");  Serial.println((int)pose_.pose());
+        // tw trennt "Geste nicht erkannt" von "erkannt, aber verworfen":
+        // 0 = gerade, 1 = ausgedreht, 2 = ausgedreht und verbraucht,
+        // 3 = Lockout nach dem Schalten.
+        Serial.print(">tw:");     Serial.println(twistToggle_.state());
 
     #if DEBUG_SET == DEBUG_ALL || DEBUG_SET == DEBUG_PINCH
         // --- Klick-Kette: env -> gate -> p_ml -> click -------------------
