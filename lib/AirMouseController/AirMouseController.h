@@ -20,7 +20,7 @@
 
 // Bindeglied zwischen Sensorik und Zustandsautomat. Die Aufgabenteilung:
 //
-//   Erkenner (TwistToggle, PoseDetector, PinchDetector/-Gesture) machen aus
+//   Erkenner (TwistToggle, PoseDetector, PinchDetector) machen aus
 //   Messwerten Ereignisse.
 //   AirMouseState entscheidet allein, was diese Ereignisse bedeuten, und
 //   liefert die auszufuehrenden Aktionen zurueck.

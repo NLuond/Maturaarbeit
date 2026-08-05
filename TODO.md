@@ -138,16 +138,17 @@ Faktor ~2 zeitgedehnt.
   aus Kap. 5 nicht belastbar.
 
 ## Zustandsautomat (neu, PC-getestet)
-`lib/AirMouseState/AirMouseState.h` – drei Achsen (Power / Pose / Grab), alle
-Übergänge in einer Tabelle, keine Zustandsbits mehr im Controller verstreut.
-Test: `test/test_state_machine.cpp`, 1251 Prüfungen, läuft auf dem PC.
+`lib/AirMouseState/AirMouseState.h` – zwei Achsen (Power / Pose), alle Übergänge
+in einer Tabelle, keine Zustandsbits mehr im Controller verstreut. Keine
+`Grab`-Achse, siehe `CLAUDE.md`.
+Test: `test/test_state_machine.cpp`, läuft auf dem PC, Kriterium `0 Fehler`.
 
 ```bash
 g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o build/fsm.exe test/test_state_machine.cpp && ./build/fsm.exe
 ```
 
-- [ ] **Am Gerät gegenprüfen:** Kanäle `on`, `pose` (0=Point, 1=Idle, 2=Scroll)
-  und `drag` im Teleplot. Der Automat ist bewiesen korrekt – offen ist nur, ob
+- [ ] **Am Gerät gegenprüfen:** Kanäle `on`, `pose` (0=Point, 1=Idle, 2=Turned)
+  im Teleplot. Der Automat ist bewiesen korrekt – offen ist nur, ob
   die *Erkenner* die richtigen Ereignisse liefern.
 - [ ] **Scroll-Schwelle:** `SCROLL_ON_DEG` steht auf 70°, die Geste ist 90°.
   Falls der Scroll-Modus zu früh anspringt, auf 75–80 anheben.

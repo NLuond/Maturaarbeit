@@ -236,5 +236,5 @@ Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
   Puffer und `float`.
 - `TODO.md` ist das laufende Arbeitsjournal (offene Messungen, Einstellwerte, Entscheide
   fuer die schriftliche Arbeit). Es ist stellenweise aelter als der Code — z.B. nennt es
-  `USE_TWIST_GUARD` / `USE_ROLL_COMP`, die es in `config.h` nicht mehr gibt. Immer gegen
-  den Code pruefen, bevor daraus etwas uebernommen wird.
+  `USE_TWIST_GUARD`, das es in `config.h` nicht mehr gibt. Immer gegen den Code pruefen,
+  bevor daraus etwas uebernommen wird.
