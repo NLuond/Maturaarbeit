@@ -58,9 +58,21 @@ namespace cfg {
     constexpr float    DT                 = SAMPLE_INTERVAL_US * 1e-6f;
 
     // Nullpunkt des Gyroskops driftet mit der Temperatur. Er wird nur
-    // nachgefuehrt, solange das Geraet ruhig liegt.
-    constexpr float BIAS_STILL_DPS = 15.f;
-    constexpr float BIAS_TAU       = 2.0f;
+    // nachgefuehrt, solange das Geraet wirklich ruhig liegt.
+    //
+    // Die Schwelle lag bei 15 Grad/s und damit ueber der langsamsten gemeinten
+    // Bewegung: langsames, gezieltes Zeigen liegt bei 5 bis 10 Grad/s und fiel
+    // mitten ins Lernfenster. Der Schaetzer uebernahm die gewollte Drehrate als
+    // Nullpunkt, der Cursor wurde beim langsamen Ziehen immer langsamer und
+    // driftete beim Anhalten zurueck - ein Symptom, das man einer zu starken
+    // Glaettung zuschreiben wuerde und das keine war.
+    //
+    // Die zweite Bedingung schliesst aus, dass eine gleichfoermige Drehung
+    // ohne Drehratenanteil durchrutscht: ein ruhendes Board misst genau 1 g.
+    // BIAS_TAU laenger, weil echter Temperaturdrift langsam ist.
+    constexpr float BIAS_STILL_DPS = 3.f;
+    constexpr float BIAS_ACC_TOL   = 0.05f;   // erlaubte Abweichung von 1 g
+    constexpr float BIAS_TAU       = 5.0f;
 
     // --- Pinch ----------------------------------------------------------
     constexpr float HP_CUTOFF_HZ = 30.f;

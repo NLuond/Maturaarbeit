@@ -49,7 +49,8 @@ public:
         // er ist ja keine Schwankung, sondern ein Versatz. Deshalb wird er
         // gelernt, solange das Geraet ruhig liegt, und danach abgezogen. Ohne
         // das wandert der Cursor von allein.
-        if (s.gyroSum < cfg::BIAS_STILL_DPS) {
+        if (s.gyroSum < cfg::BIAS_STILL_DPS &&
+            fabsf(s.accMag - 1.f) < cfg::BIAS_ACC_TOL) {
             const float a = 1.f - expf(-dt / cfg::BIAS_TAU);
             bx_ += a * (rawX - bx_);
             by_ += a * (rawY - by_);
