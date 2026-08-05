@@ -3,6 +3,7 @@
 #include <math.h>
 #include "config.h"
 #include "ImuSample.h"
+#include "LowPass.h"
 
 class ImuReader {
 public:
@@ -26,6 +27,16 @@ public:
         s.ax = imu_.readFloatAccelX();
         s.ay = imu_.readFloatAccelY();
         s.az = imu_.readFloatAccelZ();
+
+        // Erdbeschleunigung schaetzen und abziehen. Eine gehaltene Haltung
+        // aendert sich im Bereich unter 1 Hz, die Beschleunigung beim Zeigen
+        // und beim Pinchen deutlich darueber - 0.8 Hz trennt beides. LowPass
+        // setzt sich beim ersten Sample auf den Eingang, es gibt also keinen
+        // Einschwinger beim Start.
+        s.lax = s.ax - lpGx_.run(s.ax, dt);
+        s.lay = s.ay - lpGy_.run(s.ay, dt);
+        s.laz = s.az - lpGz_.run(s.az, dt);
+
         s.gx = rawX - bx_;
         s.gy = rawY - by_;
         s.gz = rawZ - bz_;
@@ -50,4 +61,5 @@ public:
 private:
     LSM6DS3 imu_;
     float   bx_ = 0.f, by_ = 0.f, bz_ = 0.f;
+    LowPass lpGx_{cfg::GRAVITY_LP_HZ}, lpGy_{cfg::GRAVITY_LP_HZ}, lpGz_{cfg::GRAVITY_LP_HZ};
 };
