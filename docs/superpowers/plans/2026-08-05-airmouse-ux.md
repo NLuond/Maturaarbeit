@@ -1204,16 +1204,21 @@ static void test_gainStaysBounded() {
     CHECK(true, "Faktor bleibt in den Grenzen");
 }
 
-// Der Winkel springt bei plus/minus 180 Grad um. Ohne Behandlung waere der
-// Sprung eine scheinbare Rate von zehntausenden Grad pro Sekunde und die
-// Bremse bliebe danach eine halbe Sekunde zu.
+// Der Winkel springt bei plus/minus 180 Grad um. Ohne wrapDeg waere der Sprung
+// eine Differenz von 358 statt 2 Grad, also eine scheinbare Rate von rund
+// 75'000 Grad/s statt der tatsaechlichen ~420.
+//
+// Geprueft wird die Rate und nicht der Faktor: 2 Grad in einem Takt SIND eine
+// schnelle Drehung, die Bremse darf und soll dabei zugehen. Falsch waere nur
+// die Groessenordnung. Die Schranke liegt weit ueber dem richtigen Wert und
+// weit unter dem falschen, trifft also keine Aussage ueber die Glaettung.
 static void test_wrapAroundIsNotARate() {
     TwistGuard g;
     float deg = 179.f;
     turnAt(g, deg, 0.f, 0.5f);
     deg = -179.f;                              // Sprung ueber die Grenze
-    const float out = g.update(deg, DT);
-    CHECK(out > 0.9f, "der Umschlag bei 180 Grad wird als Drehung gelesen");
+    g.update(deg, DT);
+    CHECK(g.rateDps() < 1000.f, "der Umschlag bei 180 Grad wird als Drehung gelesen");
 }
 
 int main() {
