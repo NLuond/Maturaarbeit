@@ -67,6 +67,23 @@ static void test_cancelBlocksToggle() {
           "abgebrochene Ausdrehung schaltet trotzdem");
 }
 
+// cancel() darf nur den Toggle unterdruecken, nicht den Uebergang in den
+// Scroll-Modus: ein Pinch waehrend der Ausdrehung ist ein Rechtsklick, keine
+// Absage an die Geste selbst. Bleibt die Hand danach weiter draussen, muss
+// Held trotzdem kommen - sonst haengt das Scrollen zufaellig davon ab, ob
+// zwischendurch geklickt wurde.
+static void test_cancelDoesNotBlockHeld() {
+    TwistToggle t;
+    uint32_t now = 1000;
+    hold(t, 0.f,  true, now, 200);
+    hold(t, 90.f, true, now, 300);
+    t.cancel();                              // env-Gate ging auf: Pinch erkannt
+    CHECK(hold(t, 90.f, true, now, 1500) == TwistEvent::Held,
+          "Held kommt nach cancel() nicht");
+    CHECK(hold(t, 0.f, true, now, 200) != TwistEvent::Toggle,
+          "Rueckkehr nach Held und cancel() schaltet trotzdem");
+}
+
 static void test_partialReturnDoesNotToggle() {
     TwistToggle t;
     uint32_t now = 1000;
@@ -137,6 +154,7 @@ int main() {
     test_slowReturnDoesNotToggle();
     test_heldComesOnceAfterMaxMs();
     test_cancelBlocksToggle();
+    test_cancelDoesNotBlockHeld();
     test_partialReturnDoesNotToggle();
     test_levelLossBlocksToggle();
     test_lockoutBlocksSecondToggle();
