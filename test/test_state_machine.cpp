@@ -132,6 +132,26 @@ static void test_rightClickWorksWhileScrollJoystickIsOn() {
     CHECK(a.rightClick, "Rechtsklick faellt weg, sobald der Joystick an ist");
 }
 
+// ScrollJoystick::dead_ ist eine Verriegelung: sie wird nur waehrend
+// scroll_.update() nachgefuehrt, und das laeuft im Controller nur, solange
+// scrolling() wahr ist. Verlaesst man die abgedrehte Haltung, friert dead_
+// auf seinem letzten Wert ein - haengengeblieben bei false, wuerde ein
+// erneutes Ausdrehen und sofortiges Pinchen (innerhalb der ersten Sekunde,
+// bevor onTwistHeld den Joystick ueberhaupt wieder zuschaltet) faelschlich
+// als "Neigung nicht ruhig" gelten und den Rechtsklick verschlucken. Ohne
+// laufenden Joystick darf scrollIdle deshalb gar nicht erst gefragt werden.
+static void test_rightClickIgnoresStaleScrollIdleWhenJoystickIsOff() {
+    AirMouseState s = inPose(Pose::Turned);
+    const Actions a1 = s.onPinch(true);
+    CHECK(a1.rightClick, "Rechtsklick faellt aus, obwohl der Joystick noch aus ist");
+    CHECK(a1.hapticPulses == 2, "Rechtsklick meldet nicht zwei Impulse");
+
+    AirMouseState s2 = inPose(Pose::Turned);
+    const Actions a2 = s2.onPinch(false);
+    CHECK(a2.rightClick, "eine veraltete scrollIdle==false unterdrueckt den Rechtsklick");
+    CHECK(a2.hapticPulses == 2, "Rechtsklick meldet nicht zwei Impulse");
+}
+
 static void test_pinchInIdleDoesNothing() {
     AirMouseState s = inPose(Pose::Idle);
     const Actions a = s.onPinch(true);
@@ -328,6 +348,7 @@ int main() {
     test_pinchWhileTurnedClicksRight();
     test_pinchWhileActuallyScrollingDoesNothing();
     test_rightClickWorksWhileScrollJoystickIsOn();
+    test_rightClickIgnoresStaleScrollIdleWhenJoystickIsOff();
     test_pinchInIdleDoesNothing();
     test_exactlyOneButtonPerPose();
     test_pinchIsStateless();

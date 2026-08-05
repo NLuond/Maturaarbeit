@@ -25,8 +25,11 @@
 //   onTwistHeld| ignor. | ignor.         | ignor.         | Scroll-Start
 //   onPinch    | ignor. | Linksklick     | ignoriert      | Rechtsklick*
 //
-//   * nur wenn die Armneigung ruhig steht (scrollIdle) - wer gerade den
-//     Scroll-Joystick bewegt, bekommt keinen Klick mitten in den Ausschlag.
+//   * ausser der Scroll-Joystick laeuft UND die Armneigung steht gerade
+//     ausserhalb der Totzone (scrollIdle == false) - dann ist die Hand mit
+//     Scrollen beschaeftigt, und ein Klick mitten im Ausschlag waere fuer den
+//     Nutzer nicht vorhersehbar. Laeuft der Joystick nicht, gibt es nichts,
+//     womit die Neigung kollidieren koennte, und der Rechtsklick zaehlt immer.
 //
 // Der Automat fuehrt selbst nichts aus. Er meldet ueber Actions zurueck, was zu
 // tun ist, und der Aufrufer erledigt es. Damit haengt er an keiner Hardware,
@@ -114,9 +117,12 @@ public:
     }
 
     // Die Haltung entscheidet ueber die Taste. scrollIdle sagt, ob die
-    // Armneigung in der Totzone des Joysticks steht - wer gerade scrollt,
-    // kippt den Arm, und ein Klick mitten im Lauf waere fuer den Nutzer nicht
-    // vorhersehbar.
+    // Armneigung in der Totzone des Joysticks steht - das zaehlt aber nur,
+    // wenn der Joystick ueberhaupt laeuft (scrollOn_): wer gerade scrollt und
+    // den Arm kippt, bekaeme sonst einen Klick mitten im Ausschlag. Laeuft der
+    // Joystick nicht - die ersten Sekunde der Ausdrehung, oder danach wieder
+    // nach dem Zurueckdrehen - ist die Neigung fuer den Klick bedeutungslos
+    // und der Rechtsklick zaehlt immer.
     Actions onPinch(bool scrollIdle) {
         Actions a;
         if (power_ != Power::On) return a;
@@ -126,7 +132,7 @@ public:
                 a.click = true; a.hapticPulses = 1;
                 break;
             case Pose::Turned:
-                if (scrollIdle) { a.rightClick = true; a.hapticPulses = 2; }
+                if (!scrollOn_ || scrollIdle) { a.rightClick = true; a.hapticPulses = 2; }
                 break;
             case Pose::Idle:
                 break;
