@@ -51,7 +51,7 @@ static void test_startsOff() {
 static void test_offIgnoresEverything() {
     AirMouseState s;
     const Actions a1 = s.onPinch();
-    const Actions a2 = s.onPose(Pose::Scroll);
+    const Actions a2 = s.onPose(Pose::Turned);
     const Actions a3 = s.onPose(Pose::Idle);
 
     CHECK(!a1.click, "ausgeschaltet wird links geklickt");
@@ -80,7 +80,7 @@ static void test_shakeToggles() {
 
 // Beim Einschalten in verdrehter Hand darf nicht die alte Haltung gelten.
 static void test_shakeResetsPose() {
-    AirMouseState s = inPose(Pose::Scroll);
+    AirMouseState s = inPose(Pose::Turned);
     s.onShake();                       // aus
     const Actions on = s.onShake();    // wieder ein
     CHECK(s.pose() == Pose::Point, "Haltung nach dem Einschalten nicht zurueckgesetzt");
@@ -106,7 +106,7 @@ static void test_pinchWhileTurnedClicksRight() {
 }
 
 static void test_pinchWhileScrollingDoesNothing() {
-    AirMouseState s = inPose(Pose::Scroll);
+    AirMouseState s = inPose(Pose::Turned);
     const Actions a = s.onPinch();
     CHECK(!a.click, "Pinch in der Scroll-Haltung klickt links");
     CHECK(!a.rightClick, "Pinch in der Scroll-Haltung klickt rechts");
@@ -117,7 +117,7 @@ static void test_pinchWhileScrollingDoesNothing() {
 // mehr ablesen, welche Taste ein Pinch gerade ausloesen wuerde.
 static void test_exactlyOneButtonPerPose() {
     int left = 0, right = 0, none = 0;
-    for (Pose p : {Pose::Point, Pose::Idle, Pose::Scroll}) {
+    for (Pose p : {Pose::Point, Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(p);
         const Actions a = s.onPinch();
         CHECK(actionsConsistent(a), "Pinch meldet beide Tasten zugleich");
@@ -133,7 +133,7 @@ static void test_exactlyOneButtonPerPose() {
 // Der Pinch veraendert den Zustand nicht - er ist reine Ausgabe. Sonst haette
 // die Klickrate einen Einfluss darauf, was die naechste Geste bedeutet.
 static void test_pinchIsStateless() {
-    for (Pose p : {Pose::Point, Pose::Idle, Pose::Scroll}) {
+    for (Pose p : {Pose::Point, Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(p);
         const Actions first = s.onPinch();
         for (int i = 0; i < 20; i++) {
@@ -149,7 +149,7 @@ static void test_pinchIsStateless() {
 // --- Haltungswechsel ---------------------------------------------------
 
 static void test_samePoseIsNoOp() {
-    for (Pose p : {Pose::Point, Pose::Idle, Pose::Scroll}) {
+    for (Pose p : {Pose::Point, Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(p);
         const Actions a = s.onPose(p);
         CHECK(!a.haptic && !a.resetPointer && !a.enterScroll,
@@ -160,7 +160,7 @@ static void test_samePoseIsNoOp() {
 static void test_scrollEntryResetsJoystick() {
     for (Pose from : {Pose::Point, Pose::Idle}) {
         AirMouseState s = inPose(from);
-        const Actions a = s.onPose(Pose::Scroll);
+        const Actions a = s.onPose(Pose::Turned);
         CHECK(a.enterScroll, "Scroll-Haltung nullt den Joystick nicht");
         CHECK(s.scrolling(), "Scroll-Haltung kommt nicht an");
     }
@@ -169,7 +169,7 @@ static void test_scrollEntryResetsJoystick() {
 // Beim Verlassen der Zeige-Haltung muss der aufgelaufene Rest verfallen, sonst
 // laeuft er beim Zurueckdrehen als Sprung in den Cursor.
 static void test_leavingPointResetsPointer() {
-    for (Pose to : {Pose::Idle, Pose::Scroll}) {
+    for (Pose to : {Pose::Idle, Pose::Turned}) {
         AirMouseState s = turnedOn();
         const Actions a = s.onPose(to);
         CHECK(a.resetPointer, "Verlassen der Zeige-Haltung nullt den Zeiger nicht");
@@ -177,7 +177,7 @@ static void test_leavingPointResetsPointer() {
 }
 
 static void test_enteringPointResetsPointer() {
-    for (Pose from : {Pose::Idle, Pose::Scroll}) {
+    for (Pose from : {Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(from);
         const Actions a = s.onPose(Pose::Point);
         CHECK(a.resetPointer, "Betreten der Zeige-Haltung nullt den Zeiger nicht");
@@ -200,7 +200,7 @@ static void test_idleIsSilent() {
 // sondern dass nichts undefiniert bleibt und nichts im Ruhezustand wirkt.
 static void test_allStatesAllEvents() {
     const Power powers[] = { Power::Off, Power::On };
-    const Pose  poses[]  = { Pose::Point, Pose::Idle, Pose::Scroll };
+    const Pose  poses[]  = { Pose::Point, Pose::Idle, Pose::Turned };
 
     int visited = 0;
     for (Power pw : powers) {
@@ -216,7 +216,7 @@ static void test_allStatesAllEvents() {
                     case 1: a = s.onPinch();            break;
                     case 2: a = s.onPose(Pose::Point);  break;
                     case 3: a = s.onPose(Pose::Idle);   break;
-                    case 4: a = s.onPose(Pose::Scroll); break;
+                    case 4: a = s.onPose(Pose::Turned); break;
                 }
                 visited++;
 
@@ -245,7 +245,7 @@ static void test_randomWalkKeepsInvariants() {
             case 1: a = s.onPinch();            break;
             case 2: a = s.onPose(Pose::Point);  break;
             case 3: a = s.onPose(Pose::Idle);   break;
-            case 4: a = s.onPose(Pose::Scroll); break;
+            case 4: a = s.onPose(Pose::Turned); break;
         }
         if (!actionsConsistent(a)) { CHECK(false, "widerspruechliche Aktionen im Zufallslauf"); return; }
 

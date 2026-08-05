@@ -5,18 +5,20 @@
 //
 // Aufbau: zwei getrennte Achsen statt eines flachen Zustands.
 //
-//   Power - Off / On, umgeschaltet durch Schuetteln.
-//   Pose  - Point / Idle / Scroll, kommt aus der Verdrehung (PoseDetector).
+//   Power - Off / On, umgeschaltet durch die Drehgeste (TwistToggle).
+//   Pose  - Point / Idle / Turned, kommt aus der Verdrehung (PoseDetector).
 //
 // Die Haltung waehlt, was ein Pinch bedeutet:
 //
-//   Point  - Hand gerade      -> Linksklick, Cursor folgt der Bewegung.
-//   Idle   - Hand abgedreht   -> Rechtsklick.
-//   Scroll - weit abgedreht   -> Pinch ohne Wirkung, die Neigung scrollt.
+//   Point  - Hand gerade         -> Linksklick, Cursor folgt der Bewegung.
+//   Idle   - Arm nicht waagrecht -> nichts. Idle ist KEINE Zone der
+//            Verdrehung mehr, sondern allein das Ergebnis des Waagrecht-Gates.
+//   Turned - Hand abgedreht      -> Rechtsklick; nach einer Sekunde zusaetzlich
+//            Scroll-Joystick ueber die Armneigung.
 //
 // Uebergangstabelle:
 //
-//   Ereignis | Off    | On/Point       | On/Idle        | On/Scroll
+//   Ereignis | Off    | On/Point       | On/Idle        | On/Turned
 //   ---------|--------|----------------|----------------|----------------
 //   Shake    | -> On  | -> Off         | -> Off         | -> Off
 //   Pose     | ignor. | Zeiger zurueck | ggf. Wechsel   | Scroll-Start
@@ -37,7 +39,7 @@
 // "Power::Off impliziert Taste frei" - und ein Test dafuer.
 
 enum class Power : uint8_t { Off, On };
-enum class Pose  : uint8_t { Point, Idle, Scroll };
+enum class Pose  : uint8_t { Point, Idle, Turned };
 
 struct Actions {
     bool click         = false;  // links
@@ -74,7 +76,7 @@ public:
         pose_ = next;
 
         switch (next) {                                    // betreten
-            case Pose::Scroll: a.enterScroll  = true; a.haptic = true; break;
+            case Pose::Turned: a.enterScroll  = true; a.haptic = true; break;
             case Pose::Point:  a.resetPointer = true; a.haptic = true; break;
             // Idle bleibt bewusst still, sonst brummt es zweimal auf dem Weg
             // vom Zeigen in die Scroll-Haltung.
@@ -93,7 +95,7 @@ public:
         switch (pose_) {
             case Pose::Point: a.click      = true; a.haptic = true; break;
             case Pose::Idle:  a.rightClick = true; a.haptic = true; break;
-            case Pose::Scroll: break;
+            case Pose::Turned: break;
         }
         return a;
     }
@@ -103,7 +105,7 @@ public:
 
     bool on()        const { return power_ == Power::On; }
     bool pointing()  const { return power_ == Power::On && pose_ == Pose::Point; }
-    bool scrolling() const { return power_ == Power::On && pose_ == Pose::Scroll; }
+    bool scrolling() const { return power_ == Power::On && pose_ == Pose::Turned; }
 
 private:
     Power power_ = Power::Off;

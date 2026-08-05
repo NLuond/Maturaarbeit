@@ -195,21 +195,17 @@ namespace cfg {
     // ruhiger Zeige-Haltung steht, gehoert hierhin.
     constexpr float TWIST_NEUTRAL_DEG = 0.f;
 
-    // Die Schwellen gelten relativ zu TWIST_NEUTRAL_DEG und muessen ueber der
-    // natuerlichen Streuung beim Zeigen liegen, sonst bricht das Zeigen ab.
-    // Verglichen wird der Betrag der Verdrehung. Eine Richtungskonstante gibt es
-    // bewusst nicht mehr: aus der Zeige-Haltung heraus ist SCROLL_ON_DEG
+    // Die Verdrehachse hat nur noch eine Schwelle. Was eine Ausdrehung
+    // bedeutet, entscheidet sich erst beim Zurueckdrehen (TwistToggle):
+    // schnell zurueck schaltet ein oder aus, gehalten wird daraus der
+    // Scroll-Modus, mit einem Pinch dazwischen war es ein Rechtsklick.
+    //
+    // Verglichen wird der Betrag der Verdrehung. Eine Richtungskonstante gibt
+    // es bewusst nicht: aus der Zeige-Haltung heraus ist TURN_ON_DEG
     // anatomisch nur in einer Richtung erreichbar (Supination ~90 Grad,
     // Pronation nur 10 bis 30), also muss der Code die Richtung nicht kennen.
-    // Der Bereich zwischen POINT_MAX_DEG und SCROLL_ON_DEG ist die Idle-Haltung,
-    // und die ist seit dem Rechtsklick keine Luecke mehr, sondern ein Ort, an
-    // dem man die Hand bewusst haelt. SCROLL_ON_DEG deshalb von 70 auf 85
-    // angehoben: bei 45 bis 70 waere das Band nur 25 Grad breit gewesen - zu
-    // schmal, um es beim Pinchen zuverlaessig zu treffen. Gemessen sind ueber
-    // 100 Grad erreichbar, die Scroll-Haltung bleibt also bequem in Reichweite.
-    constexpr float POINT_MAX_DEG = 45.f;
-    constexpr float SCROLL_ON_DEG = 85.f;
-    constexpr float MODE_HYST_DEG = 10.f;
+    constexpr float TURN_ON_DEG  = 70.f;
+    constexpr float TURN_OFF_DEG = 55.f;
 
     // Waagrecht-Bedingung. Haengt der Arm herunter oder ist er angehoben, ist
     // keine der drei Haltungen gemeint - der Zustandsautomat bekommt dann Idle,
@@ -225,9 +221,17 @@ namespace cfg {
     constexpr float ELEV_SIGN = -1.f;
 
     // Der Modus folgt der gehaltenen Haltung, nicht den Ausschlaegen einer
-    // schnellen Bewegung.
-    constexpr float    MODE_TAU      = 0.25f;
+    // schnellen Bewegung. Deutlich kuerzer als frueher (0.25 s): die Glaettung
+    // verzoegert Hin- und Rueckflanke um je eine Zeitkonstante, und das
+    // 1-s-Fenster der Ein/Aus-Geste waere damit um die Haelfte verschmiert.
+    constexpr float    MODE_TAU      = 0.10f;
     constexpr uint32_t MODE_DWELL_MS = 150;
+
+    // Zweite, langsamere Glaettung derselben Verdrehung - nur fuer die
+    // Roll-Kompensation im Zeiger. Dort steht der Winkel in einer Drehmatrix,
+    // und deren Rauschen landet unmittelbar als Zittern im Cursor. Die
+    // schnellere MODE_TAU waere an dieser Stelle ein Rueckschritt.
+    constexpr float    ROLLCOMP_TAU  = 0.25f;
 
     // Waehrend einer heftigen Bewegung wird die Haltung gar nicht erst
     // gewechselt. Glaettung, Haltezeit und Hysterese daempfen die Ausschlaege

@@ -170,12 +170,11 @@ private:
 
     void handlePointing(const ImuSample& s, float dt, uint32_t now_us) {
         float px, py;
-        // Die Verdrehung kommt geglaettet aus dem Detektor, nicht roh aus der
-        // Lageschaetzung: sie geht in eine Drehmatrix ein, und deren Rauschen
-        // wuerde sonst als Zittern im Cursor landen. Die Ausblendung nach oben
-        // braucht die Armneigung - sie soll greifen, wenn der Arm an seine
-        // Reichweite kommt.
-        pointer_.update(s.gx, s.gz, pose_.relTwistDeg(), elev_, dt, px, py);
+        // Die Verdrehung kommt aus dem langsamer geglaetteten Kanal, nicht aus
+        // dem, mit dem die Haltung und die Drehgeste arbeiten: sie geht hier in
+        // eine Drehmatrix ein, und deren Rauschen wuerde als Zittern im Cursor
+        // landen.
+        pointer_.update(s.gx, s.gz, pose_.relTwistSlow(), elev_, dt, px, py);
 
         // Waehrend sich der Unterarm dreht, laeuft der Cursor nicht mit. Der
         // Faktor greift hier und nicht vor dem 1-Euro-Filter, damit der Filter
@@ -218,7 +217,7 @@ private:
     }
 
     // Teleplot-Ausgabe: eine Zeile ">name:wert" pro Kanal.
-    // pose: 0 = Point, 1 = Idle, 2 = Scroll (Reihenfolge von enum class Pose).
+    // pose: 0 = Point, 1 = Idle, 2 = Turned (Reihenfolge von enum class Pose).
     void debug(const ImuSample& s, float env, uint32_t now_us) {
     #if DEBUG_TELEPLOT
         if (now_us - lastDbg_ < cfg::DEBUG_INTERVAL_US) return;
