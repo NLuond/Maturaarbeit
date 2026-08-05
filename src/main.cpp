@@ -12,12 +12,15 @@ AirMouseController app(mouse);
 
 static uint32_t nextSample_us = 0;
 
-#if DEBUG_TELEPLOT && !COLLECT_MODE
+#if DEBUG_TELEPLOT || COLLECT_MODE
 // Zaehlt, wie oft die Schleife einen ganzen Abtastschritt verpasst hat. Jeder
 // Zaehlschritt bedeutet ein zeitlich gedehntes ML-Fenster - der Klassifikator
-// sieht dann etwas anderes als im Training. Steigt ovr waehrend einer Messung,
-// misst man den Messaufbau und nicht mehr das System.
-static uint16_t overruns   = 0;
+// bzw. das Training sieht dann etwas anderes als vorgesehen.
+static uint16_t overruns = 0;
+#endif
+#if DEBUG_TELEPLOT && !COLLECT_MODE
+// Nur der Teleplot-Pfad drosselt seine Ausgabe. Im COLLECT_MODE waere die
+// Variable definiert und ungenutzt - das gibt eine Compiler-Warnung.
 static uint32_t lastOvrDbg = 0;
 #endif
 
@@ -29,6 +32,15 @@ void setup() {
 #if !COLLECT_MODE
     mouse.begin();
     app.begin();
+#endif
+#if COLLECT_MODE
+    // Aufnahme-Warnleuchte. LED_BUILTIN des XIAO nRF52840 ist aktiv LOW:
+    // HIGH ist aus. Sie geht an, sobald die Schleife einen Abtastschritt
+    // verpasst hat, und bleibt bis zum Reset an. Leuchtet sie nach der
+    // Aufnahme, ist der Datensatz zeitlich gedehnt und wird verworfen - der
+    // CSV selbst sieht man das nicht an.
+    pinMode(LED_BUILTIN, OUTPUT);
+    digitalWrite(LED_BUILTIN, HIGH);
 #endif
     nextSample_us = micros();
 }
@@ -43,8 +55,11 @@ void loop() {
     nextSample_us += cfg::SAMPLE_INTERVAL_US;
     if ((int32_t)(now_us - nextSample_us) > (int32_t)cfg::SAMPLE_INTERVAL_US) {
         nextSample_us = now_us + cfg::SAMPLE_INTERVAL_US;
-    #if DEBUG_TELEPLOT && !COLLECT_MODE
+    #if DEBUG_TELEPLOT || COLLECT_MODE
         overruns++;
+    #endif
+    #if COLLECT_MODE
+        digitalWrite(LED_BUILTIN, LOW);   // aktiv LOW: an, gelatcht bis zum Reset
     #endif
     }
 
@@ -64,7 +79,13 @@ void loop() {
 
     for (int i = 0; i < feat::CHANNELS; i++) {
         if (i) Serial.print(',');
-        Serial.print(f[i], 4);
+        // Kanal 0 ist die Huellkurve. Sie bewegt sich zwischen 0.005
+        // (Untergrund) und 0.125 (kraeftiger Pinch); bei drei Stellen bliebe
+        // am unteren Ende eine einzige signifikante Ziffer uebrig, und genau
+        // dort liegt die Schwelle ENV_ON. Die uebrigen vier Kanaele liegen
+        // unter der Sensoraufloesung, drei Stellen genuegen - das spart bei
+        // 209 Hz rund ein Fuenftel der Serial-Last.
+        Serial.print(f[i], i == 0 ? 4 : 3);
     }
     Serial.println();
 #else
