@@ -16,14 +16,16 @@ public:
         refElev_ = elevDeg;
         acc_     = 0.f;
         rate_    = 0.f;
+        dead_ = true;   // frisch eingetreten: die Neigung IST der Nullpunkt
     }
 
     // Liefert die Anzahl Wheel-Schritte fuer diesen Aufruf, meistens 0.
     int8_t update(float elevDeg, float dt, uint32_t now_ms) {
         const float dev = elevDeg - refElev_;
         const float mag = fabsf(dev) - cfg::SCROLL_DEAD_DEG;
+        dead_ = (mag <= 0.f);
 
-        if (mag <= 0.f) { rate_ = 0.f; return 0; }
+        if (dead_) { rate_ = 0.f; return 0; }
 
         rate_ = mag * cfg::SCROLL_GAIN;
         if (rate_ > cfg::SCROLL_MAX_HZ) rate_ = cfg::SCROLL_MAX_HZ;
@@ -44,9 +46,15 @@ public:
 
     float rate() const { return rate_; }
 
+    // Die Neigung steht in der Totzone, es wird also gerade nicht gescrollt.
+    // Der Zustandsautomat entscheidet daran, ob ein Pinch in der abgedrehten
+    // Haltung als Rechtsklick gilt.
+    bool inDeadzone() const { return dead_; }
+
 private:
     float    refElev_ = 0.f;
     float    acc_     = 0.f;
     float    rate_    = 0.f;
     uint32_t tLast_   = 0;
+    bool dead_ = true;
 };
