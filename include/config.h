@@ -156,9 +156,22 @@ namespace cfg {
     constexpr float ELEV_LIMIT = 45.f;
     constexpr float ELEV_FADE  = 12.f;
 
-    // Berichtsintervall zum Host. Kuerzer als das BLE-Verbindungsintervall zu
-    // senden bringt nichts, die Pakete warten dann nur in der Warteschlange.
+    // Berichtsintervall zum Host. Ueber BLE bringt es nichts, kuerzer als das
+    // Verbindungsintervall zu senden - die Pakete warten dann nur in der
+    // Warteschlange. Ueber USB pollt der Host jede Millisekunde, dort ist die
+    // Halbierung ein direkter Latenzgewinn und verdoppelt zugleich die
+    // Obergrenze der uebertragbaren Geschwindigkeit (127 px je Bericht).
+#if USE_BLE_HID
     constexpr uint32_t MOVE_INTERVAL_US = 10000;
+#else
+    constexpr uint32_t MOVE_INTERVAL_US = 5000;
+#endif
+
+    // Wie viele Berichte hoechstens im selben Takt hintereinander gehen, um
+    // einen Rueckstau abzubauen. Ohne das braucht ein Rueckstau von 300 px drei
+    // Intervalle, bis er draussen ist. Die Obergrenze verhindert, dass eine
+    // haengende Gegenstelle die Schleife blockiert.
+    constexpr int MOVE_MAX_REPORTS = 3;
 
     // Obergrenze des Bewegungs-Rueckstaus in Pixeln je Achse. Zwei Pakete
     // (2 x 127) federn eine kurzzeitig volle Warteschlange ab; alles darueber

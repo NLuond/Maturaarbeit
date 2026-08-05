@@ -173,26 +173,32 @@ private:
         if (now_us - lastMove_ < cfg::MOVE_INTERVAL_US) return;
         lastMove_ = now_us;
 
-        const int8_t mx = (int8_t)constrain(accumX_, -127.f, 127.f);
-        const int8_t my = (int8_t)constrain(accumY_, -127.f, 127.f);
-        // Nur abziehen, wenn das Paket auch angenommen wurde, sonst geht die
-        // Bewegung bei voller Warteschlange verloren.
-        if (mx || my) {
+        // Mehrere Berichte im selben Takt, solange Rueckstau da ist. Ein
+        // einzelner Bericht traegt hoechstens 127 px je Achse; bei schneller
+        // Bewegung laeuft mehr auf, und der Rest kaeme sonst erst im naechsten
+        // Intervall heraus - der Cursor laeuft dann nach dem Anhalten nach.
+        for (int i = 0; i < cfg::MOVE_MAX_REPORTS; i++) {
+            const int8_t mx = (int8_t)constrain(accumX_, -127.f, 127.f);
+            const int8_t my = (int8_t)constrain(accumY_, -127.f, 127.f);
+            if (!mx && !my) break;
+
+            // Nur abziehen, wenn das Paket auch angenommen wurde, sonst geht
+            // die Bewegung bei voller Warteschlange verloren.
             if (mouse_.move(mx, my)) { accumX_ -= mx; accumY_ -= my; }
-            // Abgelehnte Pakete stauen sich in accumX_/accumY_ und gehen beim
-            // naechsten Mal mit hinaus. Steigt moveFail_ im Betrieb, wird
-            // schneller gemeldet als die Gegenstelle ausliefert.
-            //
-            // Der Rueckstau wird dabei begrenzt: nimmt die Gegenstelle laenger
-            // gar nichts an - Host noch nicht aufgezaehlt, Kabel raus, BLE nicht
-            // verbunden - liefe die Summe sonst minutenlang weiter und der
-            // Cursor schoesse beim Verbinden quer ueber den Schirm. Zwei Pakete
-            // Vorrat federn eine volle Warteschlange ab, mehr ist kein Rueckstau
-            // mehr, sondern eine fehlende Verbindung.
             else {
+                // Abgelehnte Pakete stauen sich in accumX_/accumY_ und gehen
+                // beim naechsten Mal mit hinaus. Steigt moveFail_ im Betrieb,
+                // wird schneller gemeldet als die Gegenstelle ausliefert.
+                //
+                // Der Rueckstau wird dabei begrenzt: nimmt die Gegenstelle
+                // laenger gar nichts an - Host noch nicht aufgezaehlt, Kabel
+                // raus, BLE nicht verbunden - liefe die Summe sonst minutenlang
+                // weiter und der Cursor schoesse beim Verbinden quer ueber den
+                // Schirm.
                 moveFail_++;
                 accumX_ = constrain(accumX_, -cfg::MOVE_BACKLOG_MAX, cfg::MOVE_BACKLOG_MAX);
                 accumY_ = constrain(accumY_, -cfg::MOVE_BACKLOG_MAX, cfg::MOVE_BACKLOG_MAX);
+                break;   // haengende Gegenstelle: nicht weiter nachschieben
             }
         }
     }
