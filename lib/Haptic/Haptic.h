@@ -2,39 +2,58 @@
 #include <Arduino.h>
 #include "config.h"
 
+// Kleiner Impuls-Sequenzer: n Impulse à HAPTIC_MS mit HAPTIC_GAP_MS dazwischen.
+// Ein Impuls bedeutet Linksklick, Haltungswechsel oder Ein/Aus, zwei bedeuten
+// Rechtsklick.
+//
+// Es gibt bewusst KEINE feste Sperrfrist mehr. Eine solche muesste ueber der
+// Dauer des Zwei-Impuls-Musters liegen (130 ms), cfg::DEBOUNCE_MS steht aber
+// auf 180 ms - ein Doppelklick wuerde damit nur noch einmal brummen. Gesperrt
+// ist stattdessen genau, solange ein Muster laeuft, plus eine Luecke danach.
+// Das erfuellt denselben Zweck: dicht aufeinander folgende Ausloeser
+// verschmelzen nicht zu einem langen Brummen, sondern bleiben abzaehlbar.
 class Haptic {
 public:
     void begin() {
         pinMode(cfg::HAPTIC_PIN, OUTPUT);
         digitalWrite(cfg::HAPTIC_PIN, LOW);
     }
-    // Sperrfrist gegen Dauerbrummen. Ereignisse fallen oft dicht zusammen: ein
-    // Doppel-Pinch meldet Klick und Drag-Start kurz nacheinander, ein Wechsel
-    // durch mehrere Haltungen ebenso. Ohne Sperre setzt jeder Ausloeser tStart_
-    // neu, der Motor laeuft durch und der Nutzer spuert einen einzigen langen
-    // Brumm statt einer abzaehlbaren Rueckmeldung - genau das, was eine
-    // haptische Bestaetigung nicht sein darf.
-    void trigger(uint32_t now_ms) {
-        if (used_ && now_ms - tStart_ < cfg::HAPTIC_COOLDOWN_MS) return;
-        used_   = true;
-        active_ = true;
-        tStart_ = now_ms;
+
+    void trigger(uint32_t now_ms, uint8_t pulses = 1) {
+        if (pulses == 0) return;
+        if (busy_) return;                                        // laufendes Muster nicht stoeren
+        if (used_ && now_ms - tFree_ < cfg::HAPTIC_GAP_MS) return; // Ruhe danach
+        left_  = pulses;
+        busy_  = true;
+        used_  = true;
+        on_    = true;
+        tStep_ = now_ms;
         digitalWrite(cfg::HAPTIC_PIN, HIGH);
     }
 
-
     void update(uint32_t now_ms) {
-        if (!active_) return;
-        if (now_ms - tStart_ >= cfg::HAPTIC_MS) {
+        if (!busy_) return;
+        if (on_) {
+            if (now_ms - tStep_ < cfg::HAPTIC_MS) return;
             digitalWrite(cfg::HAPTIC_PIN, LOW);
-            active_ = false;
+            on_    = false;
+            tStep_ = now_ms;
+            if (--left_ == 0) { busy_ = false; tFree_ = now_ms; }
+        } else {
+            if (now_ms - tStep_ < cfg::HAPTIC_GAP_MS) return;
+            digitalWrite(cfg::HAPTIC_PIN, HIGH);
+            on_    = true;
+            tStep_ = now_ms;
         }
     }
 
 private:
-    // used_ nur, damit die Sperre nicht schon beim ersten Ausloeser greift:
-    // kurz nach dem Start ist now_ms klein und tStart_ noch null.
-    bool     used_   = false;
-    bool     active_ = false;
-    uint32_t tStart_ = 0;
+    // used_ nur, damit die Ruhezeit nicht schon beim ersten Ausloeser greift:
+    // kurz nach dem Start ist now_ms klein und tFree_ noch null.
+    bool     busy_  = false;
+    bool     on_    = false;
+    bool     used_  = false;
+    uint8_t  left_  = 0;
+    uint32_t tStep_ = 0;
+    uint32_t tFree_ = 0;
 };

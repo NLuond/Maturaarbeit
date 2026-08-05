@@ -279,12 +279,11 @@ namespace cfg {
 
     // --- Haptik und Debug -----------------------------------------------
     constexpr int      HAPTIC_PIN = D1;
-    constexpr uint32_t HAPTIC_MS  = 45;
+    constexpr uint32_t HAPTIC_MS  = 40;
 
-    // Sperrfrist zwischen zwei Impulsen. Muss deutlich ueber HAPTIC_MS liegen,
-    // sonst verschmelzen dicht aufeinander folgende Ereignisse zu einem langen
-    // Brummen statt zwei spuerbar getrennter Impulse.
-    constexpr uint32_t HAPTIC_COOLDOWN_MS = 150;
+    // Luecke zwischen zwei Impulsen desselben Musters. Sie ist zugleich die
+    // Ruhezeit nach einem Muster, bevor das naechste starten darf.
+    constexpr uint32_t HAPTIC_GAP_MS = 50;
 
     // Teleplot kostet Serial-Bandbreite und bremst die Schleife. Fuer echte
     // Nutzungstests DEBUG_TELEPLOT ganz ausschalten.
