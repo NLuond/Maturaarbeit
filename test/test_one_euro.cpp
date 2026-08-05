@@ -58,6 +58,26 @@ static void test_neueEinstellungDaempftStaerker() {
     CHECK(rmsNeu < 0.7f * rmsAlt, "die neue Einstellung daempft nicht spuerbar staerker");
 }
 
+// Isoliert dCutoff bei fixem beta/minCutoff - anders als die beiden Tests
+// oben, die beta mitaendern und daher auch bei entfernter Glaettung
+// bestehen wuerden. Ein Mutant, der die Glaettung streicht (sp_ = s statt
+// sp_ += alphaFor(dCutoff_, dt) * (s - sp_)), macht dCutoff_ wirkungslos:
+// beide Filter unten wuerden dann identisch rechnen. Gemessen ueber mehrere
+// Fensterlaengen und Phasenlagen liegt die RMS-Reduktion stabil bei 15.2 bis
+// 15.5 Prozent (Verhaeltnis rund 0.846); die Schranke 0.90 laesst dafuer gut
+// 5 Prozentpunkte Sicherheitsabstand nach oben, ohne bei einer entfernten
+// Glaettung (Verhaeltnis 1.0) mitzugehen. Der Spitzenwert wurde ebenfalls
+// gemessen (Reduktion nur 10.3 bis 10.6 Prozent) und trennt schwaecher als
+// der Effektivwert - deshalb RMS und nicht peak.
+static void test_dCutoffIsolatedDaempftStaerker() {
+    OneEuroFilter smoothed(1.0f, 0.2f, 1.0f);
+    OneEuroFilter raw(1.0f, 0.2f, 1000.0f);
+    const float rmsSmoothed = tremorRms(smoothed, 10.f, 12.f, 3.f);
+    const float rmsRaw      = tremorRms(raw, 10.f, 12.f, 3.f);
+    CHECK(rmsSmoothed < 0.90f * rmsRaw,
+          "dCutoff-Glaettung daempft den Tremor nicht messbar staerker");
+}
+
 // Eine gehaltene Bewegung darf nicht traege werden: nach einem Sprung auf
 // 100 Grad/s muss der Filter binnen 200 ms mindestens 90 Prozent erreichen.
 static void test_stepIsFast() {
@@ -98,6 +118,7 @@ static void test_zeroDtIsSafe() {
 int main() {
     test_tremorIsAttenuated();
     test_neueEinstellungDaempftStaerker();
+    test_dCutoffIsolatedDaempftStaerker();
     test_stepIsFast();
     test_convergesToConstant();
     test_resetTakesFirstSample();
