@@ -41,11 +41,6 @@ public:
         return false;
     }
 
-    void reset() {
-        st_ = WAIT_1;
-        peakActive_ = false;
-    }
-
 private:
     enum State { WAIT_1, REFRACT_1, WAIT_2 };
 

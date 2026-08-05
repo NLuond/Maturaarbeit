@@ -1,53 +1,254 @@
-#pragma once
-#define USE_ML_PINCH true
-#define DEBUG_TELEPLOT true
-#define USE_BLE_HID true
-#define COLLECT_MODE false
+﻿#pragma once
+// Selbst tragend inkludieren: cfg:: benutzt uint32_t und den Pin-Namen D1.
+// Ohne diese beiden Zeilen kompiliert die Datei nur, wenn der Includer vorher
+// zufaellig <Arduino.h> gezogen hat.
+#include <Arduino.h>
+#include <stdint.h>
+
+#define USE_ML_PINCH    true
+#define DEBUG_TELEPLOT  true
+
+// Welche Teleplot-Kanaele gesendet werden. Alle 24 gleichzeitig sind rund
+// 17 kB/s - das kostet Rechenzeit in der Schleife, und eine zu langsame
+// Schleife dehnt genau das ML-Fenster, das man gerade untersucht. Fuer eine
+// gezielte Messung deshalb auf die passende Gruppe stellen.
+#define DEBUG_ALL       0
+#define DEBUG_PINCH     1   // env, gate, p_ml, click, gsum, nDeb, nGyro, drag
+#define DEBUG_POINT     2   // gx/gy/gz, rx, ry, pacc, accx, mvfail, twist, elev,
+                            // rtwist, level, srate
+// DEBUG_ORIENT prueft die Einbaulage nach und steht bewusst neben DEBUG_ALL,
+// nicht darin: er teilt gx/gy/gz und twist/elev mit DEBUG_POINT.
+#define DEBUG_ORIENT    3   // ax/ay/az roh + gvx/gvy/gvz geglaettet, angX/angY/angZ,
+                            // gx/gy/gz, twist, elev, rtwist, level
+#define DEBUG_SET       DEBUG_POINT
+// Voruebergehend auf USB-HID (TinyUSB), weil sich das Geraet gerade nicht per
+// Bluetooth koppeln laesst. Fuer die Arbeit bleibt BLE das Ziel - zum Einstellen
+// von Kennlinie und Haltungen ist der Uebertragungsweg aber egal, und ueber USB
+// faellt das Verbindungsintervall als Stoergroesse weg.
+#define USE_BLE_HID     false
+#define COLLECT_MODE    false
+
+// Haltungserkennung (Zeigen / Idle / Scrollen). Auf false meldet der Detektor
+// dauerhaft die Zeige-Haltung - zum Eingrenzen bei Cursor-Problemen.
+#define USE_POSE_MODE   true
+
+// Cursor-Glaettung: 1-Euro-Filter (true) gegen den festen Tiefpass mit
+// SMOOTH_TAU (false). Umschaltbar, damit sich der Unterschied messen laesst.
+#define USE_ONE_EURO    true
+
+// Roll-Kompensation: rechnet die Handverdrehung aus der Cursorbewegung heraus,
+// damit eine waagerechte Handbewegung bei verdrehter Hand nicht schraeg laeuft.
+// Auf false laufen die Achsen ungedreht wie zuvor - das ist der A/B-Vergleich
+// fuer die Evaluation. In der Grundhaltung (twist = 0) sind beide identisch,
+// der Unterschied zeigt sich erst bei verdrehter Hand.
+#define USE_ROLL_COMP   true
+
 namespace cfg {
-    constexpr int   ACCEL_RANGE_G   = 4;
-    constexpr int   ACCEL_ODR_HZ    = 208;
-    constexpr int   ACCEL_BW_HZ     = 100; 
-    constexpr int   GYRO_RANGE_DPS  = 500;
-    constexpr int   GYRO_ODR_HZ     = 208;
+    // --- Sensor ---------------------------------------------------------
+    constexpr int ACCEL_RANGE_G  = 4;
+    constexpr int ACCEL_ODR_HZ   = 208;
+    constexpr int ACCEL_BW_HZ    = 100;
+    constexpr int GYRO_RANGE_DPS = 500;
+    constexpr int GYRO_ODR_HZ    = 208;
 
-    // Pinch Vibration
-    constexpr float HP_CUTOFF_HZ    = 30.f;
-    constexpr float ENV_LP_HZ       = 15.f;
+    // Feste Schrittweite der ganzen Verarbeitung. Muss zur Abtastrate des
+    // Modells passen (209 Hz), sonst sieht der Klassifikator ein zeitlich
+    // gestauchtes Fenster. PinchDetector prueft das beim Kompilieren.
+    constexpr uint32_t SAMPLE_INTERVAL_US = 4785;
+    constexpr float    DT                 = SAMPLE_INTERVAL_US * 1e-6f;
 
-    // Pinch
-    constexpr float    ENV_ABS      = 0.018f;
+    // Nullpunkt des Gyroskops driftet mit der Temperatur. Er wird nur
+    // nachgefuehrt, solange das Geraet ruhig liegt.
+    constexpr float BIAS_STILL_DPS = 15.f;
+    constexpr float BIAS_TAU       = 2.0f;
+
+    // --- Pinch ----------------------------------------------------------
+    constexpr float HP_CUTOFF_HZ = 30.f;
+    constexpr float ENV_LP_HZ    = 15.f;
+
+    // Bi-Level-Schwelle: oeffnet bei ENV_ON, schliesst erst unter ENV_OFF.
+    // Verhindert Flattern des Gates an der Schwelle (Katsuragawa et al. 2019).
+    //
+    // Aus der ersten Aufnahme: Untergrund 0.005 bis 0.02, echte Pinches 0.045
+    // bis 0.125. Die bisherigen 0.018/0.012 lagen also mitten im Untergrund -
+    // das Gate oeffnete staendig, und jede Fehlauslösung musste danach der
+    // Klassifikator abfangen. Jetzt klar oberhalb des Untergrunds und weit
+    // unterhalb der schwaechsten echten Pinches.
+    constexpr float ENV_ON  = 0.035f;
+    constexpr float ENV_OFF = 0.020f;
+
     constexpr float    PINCH_GYRO_GUARD = 100.f;
-    constexpr uint32_t DEBOUNCE_MS  = 300;
-    constexpr uint32_t DOUBLE_MS    = 350;
-    constexpr uint32_t FREEZE_MS    = 120;
+    constexpr uint32_t FREEZE_MS        = 120;
 
-    // Pointing
-    constexpr float SENS_X      = 50.0f;
-    constexpr float SENS_Y      = 50.0f;
-    constexpr float DEADZONE    = 5.0f;
-    constexpr float ACCEL_K     = 1.0f;
-    constexpr float ACCEL_MAX   = 3.0f;
-    constexpr float SMOOTH_TAU  = 0.024f;
-    constexpr float PITCH_LIMIT = 45.f;
-    constexpr float PITCH_FADE  = 12.f;
-    constexpr uint32_t MOVE_INTERVAL_US = 16000;
+    constexpr uint32_t DEBOUNCE_MS = 180;
 
-    // Madgwick
+    // Zusammen mit der angehobenen env-Schwelle die zweite Bremse gegen
+    // Fehlauslösungen. 0.5 hiess: alles, was eher Pinch als nicht ist.
+    constexpr float    ML_CONFIDENCE = 0.65f;
+
+    // --- Zeigen ---------------------------------------------------------
+    // Pixel pro Grad Drehung: stepX = rate[Grad/s] * SENS_X * dt[s], und rate*dt
+    // sind genau die in diesem Takt gedrehten Grad.
+    //
+    // Aufgeteilt in eine niedrige Grundverstaerkung und eine kraeftigere
+    // Beschleunigung, statt einer hohen Konstante. Bei durchgehend 160 wurde
+    // schon ein halbes Grad Handzittern zu 80 Pixeln - treffsicher zeigen ging
+    // damit nicht. Jetzt sind langsame Bewegungen fein aufgeloest (110), und die
+    // Reichweite fuer schnelle Bewegungen kommt aus der Beschleunigung: bei
+    // 200 Grad/s das Dreifache, in der Spitze das Vierfache.
+    //
+    // Das ist zugleich die Gegenprobe zu Scotto et al. 2020, die eine linear
+    // steigende Verstaerkung schlechter fanden als eine gute konstante: mit
+    // ACCEL_K = 0 laeuft die konstante Variante im selben Binary.
+    constexpr float SENS_X    = 110.0f;
+    constexpr float SENS_Y    = 110.0f;
+    constexpr float ACCEL_K   = 2.0f;
+    constexpr float ACCEL_MAX = 4.0f;
+
+    // Faengt den Rest-Nullpunktfehler ab, den die Bias-Korrektur uebriglaesst.
+    // Angehoben, weil der Cursor sonst nie ganz stillsteht - beim Zielen auf ein
+    // kleines Ziel wandert er unter dem Finger weg. Der 1-Euro-Filter glaettet
+    // das Zittern, aber er entfernt es nicht.
+    constexpr float DEADZONE = 2.5f;
+
+    // 1-Euro-Filter (Casiez et al. 2012). Grenzfrequenz waechst mit der
+    // Geschwindigkeit: cutoff = MIN_CUTOFF + BETA * |Drehrate|.
+    // Einstellen in dieser Reihenfolge: erst BETA auf 0 und MIN_CUTOFF senken,
+    // bis der Stillstand ruhig ist, dann BETA anheben, bis die Verzoegerung
+    // beim Zeigen verschwindet.
+    // MIN_CUTOFF gesenkt: er bestimmt allein die Ruhe im Stillstand, und genau
+    // dort war der Cursor zu unruhig zum Zielen. BETA gleichzeitig angehoben,
+    // damit die staerkere Glaettung nicht als Verzoegerung in die schnelle
+    // Bewegung durchschlaegt - das ist der ganze Sinn des Filters: die
+    // Grenzfrequenz waechst mit der Geschwindigkeit, beides ist getrennt
+    // einstellbar (Casiez et al. 2012).
+    constexpr float EURO_MIN_CUTOFF = 0.9f;   // Hz
+    constexpr float EURO_BETA       = 0.55f;  // Hz pro Grad/s
+
+    constexpr float SMOOTH_TAU = 0.024f;      // nur fuer den Vergleichspfad
+
+    // Ausblendung nach oben, bevor der Arm an seine Reichweite laeuft. Bezug ist
+    // die Armneigung (arm::elevDeg), nicht mehr irgendein Pitch der Platine -
+    // die alte Benennung war genau der Grund, warum hier die Handverdrehung
+    // ankam und die senkrechte Bewegung schon bei gerader Hand wegschnitt.
+    constexpr float ELEV_LIMIT = 45.f;
+    constexpr float ELEV_FADE  = 12.f;
+
+    // Berichtsintervall zum Host. Kuerzer als das BLE-Verbindungsintervall zu
+    // senden bringt nichts, die Pakete warten dann nur in der Warteschlange.
+    constexpr uint32_t MOVE_INTERVAL_US = 10000;
+
+    // Obergrenze des Bewegungs-Rueckstaus in Pixeln je Achse. Zwei Pakete
+    // (2 x 127) federn eine kurzzeitig volle Warteschlange ab; alles darueber
+    // ist kein Rueckstau mehr, sondern eine fehlende Verbindung.
+    constexpr float MOVE_BACKLOG_MAX = 254.f;
+
+    // --- Handhaltung ----------------------------------------------------
+    // Verdrehung um die Unterarmachse (arm::twistDeg) in der Zeige-Haltung.
+    // Fester Bezugspunkt statt einer Kalibrierung beim Einschalten: das Board
+    // sitzt immer gleich am Arm, der Nullpunkt ist also eine Eigenschaft der
+    // Bauform und keine der einzelnen Sitzung. Kalibriert wurde bisher direkt
+    // nach dem Schuetteln - die Lageschaetzung ist dann noch von der
+    // Schuettelbewegung gestoert, und der Bezugspunkt fiel bei jedem
+    // Einschalten anders aus. Am Teleplot-Kanal "twist" ablesen: was dort in
+    // ruhiger Zeige-Haltung steht, gehoert hierhin.
+    constexpr float TWIST_NEUTRAL_DEG = 0.f;
+
+    // Die Schwellen gelten relativ zu TWIST_NEUTRAL_DEG und muessen ueber der
+    // natuerlichen Streuung beim Zeigen liegen, sonst bricht das Zeigen ab.
+    // Verglichen wird der Betrag der Verdrehung. Eine Richtungskonstante gibt es
+    // bewusst nicht mehr: aus der Zeige-Haltung heraus ist SCROLL_ON_DEG
+    // anatomisch nur in einer Richtung erreichbar (Supination ~90 Grad,
+    // Pronation nur 10 bis 30), also muss der Code die Richtung nicht kennen.
+    // Der Bereich zwischen POINT_MAX_DEG und SCROLL_ON_DEG ist die Idle-Haltung,
+    // und die ist seit dem Rechtsklick keine Luecke mehr, sondern ein Ort, an
+    // dem man die Hand bewusst haelt. SCROLL_ON_DEG deshalb von 70 auf 85
+    // angehoben: bei 45 bis 70 waere das Band nur 25 Grad breit gewesen - zu
+    // schmal, um es beim Pinchen zuverlaessig zu treffen. Gemessen sind ueber
+    // 100 Grad erreichbar, die Scroll-Haltung bleibt also bequem in Reichweite.
+    constexpr float POINT_MAX_DEG = 45.f;
+    constexpr float SCROLL_ON_DEG = 85.f;
+    constexpr float MODE_HYST_DEG = 10.f;
+
+    // Waagrecht-Bedingung. Haengt der Arm herunter oder ist er angehoben, ist
+    // keine der drei Haltungen gemeint - der Zustandsautomat bekommt dann Idle,
+    // egal wie die Hand verdreht ist. Absolut gemessen und nicht relativ zum
+    // Einschalten: "waagrecht" soll waagrecht heissen, sonst kalibriert man sich
+    // die Bedingung beim Einschalten in einer schiefen Haltung gleich weg.
+    constexpr float LEVEL_MAX_DEG  = 35.f;
+    constexpr float LEVEL_HYST_DEG = 8.f;
+
+    // Vorzeichen der Unterarmachse. +Y zeigt zur Hand oder zum Ellbogen - das
+    // haengt daran, wie herum das Board am Arm sitzt, und dreht elev um.
+    // Am Geraet gemessen: Arm heben ergab negatives elev, also -1.
+    constexpr float ELEV_SIGN = -1.f;
+
+    // Der Modus folgt der gehaltenen Haltung, nicht den Ausschlaegen einer
+    // schnellen Bewegung.
+    constexpr float    MODE_TAU      = 0.25f;
+    constexpr uint32_t MODE_DWELL_MS = 150;
+
+    // Waehrend einer heftigen Bewegung wird die Haltung gar nicht erst
+    // gewechselt. Glaettung, Haltezeit und Hysterese daempfen die Ausschlaege
+    // nur - beim Einschalt-Schuetteln reicht das nicht: gemessen laeuft die
+    // Verdrehung dabei ueber 70 Grad, der Detektor durchlaeuft also Idle bis
+    // Scroll, mit Haptik und Zeiger-Reset als Nebenwirkung.
+    //
+    // Die Schwelle liegt ueber den ~250 Grad/s des normalen Gebrauchs und unter
+    // SHAKE_ON. Die Ruhezeit danach ist noetig, weil gyroSum zwischen den beiden
+    // Schuettel-Spitzen kurz einbricht - ohne sie waere das Fenster dazwischen
+    // wieder offen.
+    constexpr float    POSE_STILL_DPS = 300.f;
+    constexpr uint32_t POSE_CALM_MS   = 250;
+
+    // --- Scroll-Joystick ------------------------------------------------
+    // Die alten Werte (8 Grad Totzone, 0.45 Schritte/s pro Grad) ergaben bei
+    // 20 Grad Neigung ganze 5 Schritte pro Sekunde - man neigte die Hand weit
+    // und es passierte fast nichts. Totzone deutlich verkleinert, damit das
+    // Scrollen frueh einsetzt, und die Verstaerkung fast verdreifacht: 10 Grad
+    // ergeben jetzt rund 8 Schritte/s, 20 Grad laufen an die Obergrenze.
+    //
+    // Die Totzone darf trotzdem nicht auf null: der Eintrittswinkel wird beim
+    // Moduswechsel gemerkt, und ohne Totzone wuerde schon das Zittern der
+    // gehaltenen Hand langsam scrollen.
+    constexpr float    SCROLL_DEAD_DEG    = 3.f;
+    constexpr float    SCROLL_GAIN        = 1.2f;   // Schritte/s pro Grad
+    constexpr float    SCROLL_MAX_HZ      = 25.f;   // Schritte/s Obergrenze
+    constexpr float    SCROLL_INVERT      = 1.f;    // -1.f dreht die Richtung
+    // Kuerzer getaktet, sonst kommen bei hoher Rate mehrere Schritte als ein
+    // Sprung heraus statt als gleichmaessiger Lauf.
+    constexpr uint32_t SCROLL_INTERVAL_MS = 40;
+
+    // --- Lage -----------------------------------------------------------
     constexpr float MADGWICK_BETA = 0.033f;
 
-    // Shake Toggle
-    constexpr float SHAKE_ON   = 350.f;
-    constexpr float SHAKE_OFF  = 180.f;
+    // Grenzfrequenz, mit der die Erdbeschleunigung aus dem Accelerometer
+    // herausgefiltert wird. Eine gehaltene Handhaltung aendert sich im Bereich
+    // unter 1 Hz, die Linearbeschleunigung beim Zeigen deutlich darueber -
+    // 0.8 Hz trennt beides, ohne die Anzeige traege zu machen.
+    constexpr float GRAVITY_LP_HZ = 0.8f;
+
+    // --- Ein/Aus durch Schuetteln ---------------------------------------
+    constexpr float    SHAKE_ON         = 350.f;
+    constexpr float    SHAKE_OFF        = 180.f;
     constexpr uint32_t SHAKE_REFRACT_MS = 80;
     constexpr uint32_t SHAKE_GAP_MIN_MS = 100;
     constexpr uint32_t SHAKE_GAP_MAX_MS = 450;
     constexpr uint32_t SHAKE_LOCKOUT_MS = 800;
 
-    // ML-Classification
-    constexpr float ML_CONFIDENCE = 0.5f;
-    // Haptik (Vibrationsmotor, PWM)
-    constexpr int      HAPTIC_PIN        = D1;
-    constexpr uint8_t  HAPTIC_PEAK       = 150;
-    constexpr uint32_t HAPTIC_ATTACK_MS  = 10;
-    constexpr uint32_t HAPTIC_MS         = 45;
+    // --- Haptik und Debug -----------------------------------------------
+    constexpr int      HAPTIC_PIN = D1;
+    constexpr uint32_t HAPTIC_MS  = 45;
+
+    // Sperrfrist zwischen zwei Impulsen. Muss deutlich ueber HAPTIC_MS liegen,
+    // sonst verschmelzen dicht aufeinander folgende Ereignisse zu einem langen
+    // Brummen statt zwei spuerbar getrennter Impulse.
+    constexpr uint32_t HAPTIC_COOLDOWN_MS = 150;
+
+    // Teleplot kostet Serial-Bandbreite und bremst die Schleife. Fuer echte
+    // Nutzungstests DEBUG_TELEPLOT ganz ausschalten.
+    constexpr uint32_t DEBUG_INTERVAL_US = 20000;
 }
+
+
+

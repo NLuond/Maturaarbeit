@@ -38,7 +38,18 @@ public:
         float rn = 1.f / sqrtf(q0*q0+q1*q1+q2*q2+q3*q3);
         q[0]=q0*rn; q[1]=q1*rn; q[2]=q2*rn; q[3]=q3*rn;
     }
-    float pitchDeg() const {
-        return asinf(constrain(2.f*(q[0]*q[2]-q[3]*q[1]), -1.f, 1.f)) * 57.29578f;
-    }
+    // Richtung von "oben" im Koerperkoordinatensystem: der Einheitsvektor, den
+    // der Beschleunigungsmesser im Ruhezustand messen wuerde. Es ist genau der
+    // Vektor, gegen den die Korrektur oben rechnet (f = up - a), nur eben ohne
+    // die Stoerung durch die Linearbeschleunigung einer schnellen Handbewegung.
+    //
+    // Bewusst kein rollDeg()/pitchDeg() mehr: die Standardformeln benennen die
+    // Drehung um X als "roll" und die um Y als "pitch". Welche Bewegung des Arms
+    // das ist, haengt aber an der Einbaulage - hier war es vertauscht, und der
+    // PoseDetector bekam jahrelang die Armneigung statt der Handverdrehung.
+    // Die Benennung gehoert deshalb dorthin, wo die Einbaulage bekannt ist
+    // (lib/ArmOrientation), nicht in den Filter.
+    float upX() const { return 2.f*(q[1]*q[3] - q[0]*q[2]); }
+    float upY() const { return 2.f*(q[0]*q[1] + q[2]*q[3]); }
+    float upZ() const { return q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3]; }
 };
