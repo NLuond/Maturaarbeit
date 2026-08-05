@@ -19,6 +19,7 @@ struct PointerTuning {
     float deadzone      = cfg::DEADZONE;
     float euroMinCutoff = cfg::EURO_MIN_CUTOFF;
     float euroBeta      = cfg::EURO_BETA;
+    float euroDCutoff   = cfg::EURO_DCUTOFF;
     float smoothTau     = cfg::SMOOTH_TAU;
     float elevLimit     = cfg::ELEV_LIMIT;
     float elevFade      = cfg::ELEV_FADE;
@@ -28,8 +29,8 @@ class OrientationPointer {
 public:
     explicit OrientationPointer(const PointerTuning& t = PointerTuning())
         : t_(t),
-          euroX_(t.euroMinCutoff, t.euroBeta),
-          euroY_(t.euroMinCutoff, t.euroBeta) {}
+          euroX_(t.euroMinCutoff, t.euroBeta, t.euroDCutoff),
+          euroY_(t.euroMinCutoff, t.euroBeta, t.euroDCutoff) {}
 
     // twistDeg ist die geglaettete Verdrehung gegenueber der Zeige-Haltung,
     // elevDeg die Neigung des Unterarms aus der Waagerechten (beide aus

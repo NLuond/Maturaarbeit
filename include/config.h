@@ -89,41 +89,45 @@ namespace cfg {
     // --- Zeigen ---------------------------------------------------------
     // Pixel pro Grad Drehung: stepX = rate[Grad/s] * SENS_X * dt[s], und rate*dt
     // sind genau die in diesem Takt gedrehten Grad.
-    //
-    // Aufgeteilt in eine niedrige Grundverstaerkung und eine kraeftigere
-    // Beschleunigung, statt einer hohen Konstante. Bei durchgehend 160 wurde
-    // schon ein halbes Grad Handzittern zu 80 Pixeln - treffsicher zeigen ging
-    // damit nicht. Jetzt sind langsame Bewegungen fein aufgeloest (110), und die
-    // Reichweite fuer schnelle Bewegungen kommt aus der Beschleunigung: bei
-    // 200 Grad/s das Dreifache, in der Spitze das Vierfache.
-    //
-    // Das ist zugleich die Gegenprobe zu Scotto et al. 2020, die eine linear
-    // steigende Verstaerkung schlechter fanden als eine gute konstante: mit
-    // ACCEL_K = 0 laeuft die konstante Variante im selben Binary.
     constexpr float SENS_X    = 110.0f;
     constexpr float SENS_Y    = 110.0f;
-    constexpr float ACCEL_K   = 2.0f;
+
+    // Beschleunigung aus. Sie greift NACH dem 1-Euro-Filter und multipliziert
+    // deshalb auch das Restzittern - bis zum Vierfachen. Scotto et al. 2020
+    // fanden eine linear steigende Verstaerkung ohnehin schlechter als eine
+    // gute konstante. ACCEL_K bleibt als Konstante stehen, damit sich die
+    // Gegenprobe ohne Reflash fahren laesst:
+    //
+    //   PointerTuning t;  t.accelK = 2.f;
+    //   OrientationPointer mitBeschleunigung(t);
+    constexpr float ACCEL_K   = 0.0f;
     constexpr float ACCEL_MAX = 4.0f;
 
     // Faengt den Rest-Nullpunktfehler ab, den die Bias-Korrektur uebriglaesst.
-    // Angehoben, weil der Cursor sonst nie ganz stillsteht - beim Zielen auf ein
-    // kleines Ziel wandert er unter dem Finger weg. Der 1-Euro-Filter glaettet
-    // das Zittern, aber er entfernt es nicht.
-    constexpr float DEADZONE = 2.5f;
+    // Gegen das Wackeln hilft sie nur begrenzt - Tremor erzeugt rund 12 Grad/s
+    // und liegt weit ueber jeder vertretbaren Totzone. Weiter anzuheben kostet
+    // feine Bewegung direkt: 2.5 Grad/s sind bei SENS_X = 110 schon 275 px/s,
+    // die stufenlos abgezogen werden.
+    constexpr float DEADZONE = 3.5f;
 
     // 1-Euro-Filter (Casiez et al. 2012). Grenzfrequenz waechst mit der
-    // Geschwindigkeit: cutoff = MIN_CUTOFF + BETA * |Drehrate|.
-    // Einstellen in dieser Reihenfolge: erst BETA auf 0 und MIN_CUTOFF senken,
-    // bis der Stillstand ruhig ist, dann BETA anheben, bis die Verzoegerung
-    // beim Zeigen verschwindet.
-    // MIN_CUTOFF gesenkt: er bestimmt allein die Ruhe im Stillstand, und genau
-    // dort war der Cursor zu unruhig zum Zielen. BETA gleichzeitig angehoben,
-    // damit die staerkere Glaettung nicht als Verzoegerung in die schnelle
-    // Bewegung durchschlaegt - das ist der ganze Sinn des Filters: die
-    // Grenzfrequenz waechst mit der Geschwindigkeit, beides ist getrennt
-    // einstellbar (Casiez et al. 2012).
-    constexpr float EURO_MIN_CUTOFF = 0.9f;   // Hz
-    constexpr float EURO_BETA       = 0.55f;  // Hz pro Grad/s
+    // Geschwindigkeit: cutoff = MIN_CUTOFF + BETA * geglaettete Drehrate.
+    //
+    // EURO_DCUTOFF ist der Tiefpass auf der Geschwindigkeit selbst, aus dem
+    // Original. Ohne ihn folgt die Grenzfrequenz dem Betrag des Signals und
+    // steht bei Handzittern genau auf den Spitzen am weitesten offen.
+    //
+    // Der wirksame Hebel gegen das Wackeln ist aber BETA: der Mittelwert des
+    // Tremors liegt bei rund 7.6 Grad/s, geglaettet wie ungeglaettet. Mit 0.55
+    // ergab das eine mittlere Grenzfrequenz von 5.1 Hz und damit kaum
+    // Daempfung bei 10 Hz; mit 0.2 sind es 2.5 Hz.
+    //
+    // Einstellen in dieser Reihenfolge (Casiez et al. 2012): erst BETA auf 0
+    // und MIN_CUTOFF senken, bis die ruhig gehaltene Hand einen ruhigen Cursor
+    // ergibt, dann BETA anheben, bis die Verzoegerung beim Zeigen verschwindet.
+    constexpr float EURO_DCUTOFF    = 1.0f;   // Hz
+    constexpr float EURO_MIN_CUTOFF = 1.0f;   // Hz
+    constexpr float EURO_BETA       = 0.2f;   // Hz pro Grad/s
 
     constexpr float SMOOTH_TAU = 0.024f;      // nur fuer den Vergleichspfad
 
