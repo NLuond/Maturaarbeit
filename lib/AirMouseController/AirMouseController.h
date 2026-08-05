@@ -16,6 +16,7 @@
 #include "Haptic.h"
 #include "LowPass.h"
 #include "ArmOrientation.h"
+#include "TwistGuard.h"
 
 // Bindeglied zwischen Sensorik und Zustandsautomat. Die Aufgabenteilung:
 //
@@ -57,6 +58,11 @@ public:
         // Winkel einzeln aus rollDeg()/pitchDeg() - und zwei davon den falschen.
         twist_ = arm::twistDeg(ahrs_.upX(), ahrs_.upZ());
         elev_  = arm::elevDeg(ahrs_.upX(), ahrs_.upY(), ahrs_.upZ()) * cfg::ELEV_SIGN;
+
+        // Muss in jedem Takt laufen, auch wenn gerade nicht gezeigt wird:
+        // die Bremse leitet ihre Rate aus der Differenz zum letzten Winkel ab,
+        // und ein ausgelassener Takt waere ein Sprung.
+        twistGain_ = twistGuard_.update(twist_, dt);
 
         // --- Ereignisse einsammeln und dem Automaten geben ---------------
         if (shaker_.tick(s.gyroSum, now_ms)) apply(fsm_.onShake(), now_ms);
@@ -108,9 +114,11 @@ private:
     ScrollJoystick     scroll_;
     ShakeToggle        shaker_;
     Haptic             haptic_;
+    TwistGuard         twistGuard_;
 
     bool     clickPulse_ = false;
     float    twist_ = 0.f, elev_ = 0.f;
+    float    twistGain_ = 1.f;
     float    accumX_ = 0.f, accumY_ = 0.f;
     uint32_t lastMove_ = 0, lastDbg_ = 0;
     uint16_t moveFail_ = 0;
@@ -136,7 +144,7 @@ private:
 
         if (a.resetPose)     pose_.reset();
         if (a.enterScroll)   scroll_.enter(elev_);
-        if (a.resetPointer) { accumX_ = accumY_ = 0.f; pointer_.reset(); }
+        if (a.resetPointer) { accumX_ = accumY_ = 0.f; pointer_.reset(); twistGuard_.reset(); }
         if (a.haptic)        haptic_.trigger(now_ms);
     }
 
@@ -168,7 +176,13 @@ private:
         // braucht die Armneigung - sie soll greifen, wenn der Arm an seine
         // Reichweite kommt.
         pointer_.update(s.gx, s.gz, pose_.relTwistDeg(), elev_, dt, px, py);
-        accumX_ += px; accumY_ += py;
+
+        // Waehrend sich der Unterarm dreht, laeuft der Cursor nicht mit. Der
+        // Faktor greift hier und nicht vor dem 1-Euro-Filter, damit der Filter
+        // eingeschwungen bleibt - sonst kaeme nach jeder Drehung eine
+        // Anfahrverzoegerung obendrauf.
+        accumX_ += px * twistGain_;
+        accumY_ += py * twistGain_;
 
         if (now_us - lastMove_ < cfg::MOVE_INTERVAL_US) return;
         lastMove_ = now_us;
@@ -257,6 +271,8 @@ private:
         Serial.print(">rtwist:"); Serial.println(pose_.relTwistDeg(), 1);
         Serial.print(">level:");  Serial.println(pose_.level() ? 1 : 0);
         Serial.print(">srate:");  Serial.println(scroll_.rate(), 2);
+        Serial.print(">tg:");     Serial.println(twistGain_, 2);
+        Serial.print(">tgr:");    Serial.println(twistGuard_.rateDps(), 1);
     #endif
 
     // Absichtlich nicht Teil von DEBUG_ALL: der Satz teilt gx/gy/gz mit
