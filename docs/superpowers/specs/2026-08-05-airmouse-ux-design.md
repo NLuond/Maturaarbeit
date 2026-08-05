@@ -401,8 +401,14 @@ aus `BETA`:
 
 `EURO_DCUTOFF` bleibt trotzdem drin, aus zwei Gründen: er stellt das Original wieder her,
 und ohne ihn folgt die Grenzfrequenz dem Betrag des Signals — sie steht dann genau auf
-den Tremorspitzen am weitesten offen. Der Spitzenwert des Wackelns ist damit schlechter,
-als der Mittelwert oben vermuten lässt. Es ist eine Korrektheitsreparatur, kein Hebel.
+den Tremorspitzen am weitesten offen. Es ist eine Korrektheitsreparatur, kein Hebel.
+
+**Gemessen** (`test/test_one_euro.cpp`, simulierter Tremor 10 Hz / 12 °/s bei 209 Hz,
+`beta` und `minCutoff` festgehalten, nur `dcutoff` variiert): der Geschwindigkeits-Tiefpass
+senkt den Effektivwert um **15.2–15.5 %**, stabil über verschiedene Fensterlängen und
+Phasenlagen. Die restliche Verbesserung trägt `beta`. Interessant für die Arbeit: der
+*Spitzenwert* trennt mit 10.3–10.6 % schlechter als der Effektivwert — die naheliegende
+Vermutung, der Effekt zeige sich vor allem in den Spitzen, ist damit widerlegt.
 
 Zahlen zur Einordnung, mit `MIN_CUTOFF = 1.0` und `BETA = 0.2`:
 
