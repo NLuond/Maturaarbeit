@@ -21,25 +21,43 @@ PlatformIO CLI liegt nicht im PATH — immer ueber den vollen Pfad aufrufen:
 Der Build ist wegen des Edge-Impulse-SDK langsam und **sehr** gespraechig; Ausgabe kuerzen
 (`2>&1 | Select-Object -Last 20`). Interessant ist nur die RAM/Flash-Zeile und `SUCCESS`.
 
-Zustandsautomat und Winkel-Ableitung werden auf dem PC getestet, nicht auf dem Chip
-(`g++` liegt unter `C:\Strawberry\c\bin`):
+Zustandsautomat, Winkel-Ableitung und die anderen hardwarefreien Module werden auf dem PC
+getestet, nicht auf dem Chip (`g++` liegt unter `C:\Strawberry\c\bin`):
 
 ```powershell
 g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine.cpp
-& "$env:TEMP\fsm.exe"     # erwartet: "322 Pruefungen, 0 Fehler", Exit 0
+& "$env:TEMP\fsm.exe"
 
 g++ -std=c++14 -Wall -Wextra -I lib/ArmOrientation -o "$env:TEMP\arm.exe" test/test_arm_orientation.cpp
-& "$env:TEMP\arm.exe"     # erwartet: "281 Pruefungen, 0 Fehler", Exit 0
+& "$env:TEMP\arm.exe"
+
+g++ -std=c++14 -Wall -Wextra -I lib/TwistToggle -o "$env:TEMP\twist.exe" test/test_twist_toggle.cpp
+& "$env:TEMP\twist.exe"
+
+g++ -std=c++14 -Wall -Wextra -I lib/TwistGuard -o "$env:TEMP\guard.exe" test/test_twist_guard.cpp
+& "$env:TEMP\guard.exe"
+
+g++ -std=c++14 -Wall -Wextra -I lib/Filters -o "$env:TEMP\euro.exe" test/test_one_euro.cpp
+& "$env:TEMP\euro.exe"
+
+g++ -std=c++14 -Wall -Wextra -I lib/ImuReader -I lib/PinchFeatures -o "$env:TEMP\feat.exe" test/test_pinch_features.cpp
+& "$env:TEMP\feat.exe"
 ```
 
-Das laeuft in Sekunden und ist der schnellste Weg, eine Aenderung an `AirMouseState` oder
-`ArmOrientation` zu pruefen — vor dem Firmware-Build, nicht danach. Es gibt keine
-`[env:native]`-Sektion, ein `pio test` wuerde also aufs Board wollen. Alles andere wird
-weiterhin ueber Kompilieren + Messen am Geraet (Teleplot) verifiziert.
+Erwartet fuer alle sechs: `0 Fehler`, Exit 0 — feste Pruefzahlen stehen bewusst nicht mehr
+hier, sie liefen bei jeder Umschreibung der Tests auseinander.
 
-Beide Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt:
-`ArmOrientation.h` inkludiert bewusst weder `Arduino.h` noch `config.h`. Das Vorzeichen
-`cfg::ELEV_SIGN` wird deshalb erst im Controller angewandt, nicht im Modul.
+Das laeuft in Sekunden und ist der schnellste Weg, eine Aenderung an einem dieser Module
+zu pruefen — vor dem Firmware-Build, nicht danach. Es gibt keine `[env:native]`-Sektion,
+ein `pio test` wuerde also aufs Board wollen. Alles andere wird weiterhin ueber
+Kompilieren + Messen am Geraet (Teleplot) verifiziert.
+
+Alle sechs Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt:
+`ArmOrientation.h` inkludiert bewusst weder `Arduino.h` noch `config.h`, ebenso
+`TwistToggle.h`, `TwistGuard.h`, `OneEuro.h` und `PinchFeatures.h`. Parameter, die sonst
+aus `cfg::` kaemen, stecken deshalb in eigenen Tuning-Structs (`TwistTuning`,
+`TwistGuardTuning`, `PointerTuning`); das Vorzeichen `cfg::ELEV_SIGN` wird erst im
+Controller angewandt, nicht im `ArmOrientation`-Modul.
 
 Beim Aendern von Schaltern in `config.h` **nie** parallel zu einem laufenden Build: zwei
 gleichzeitige `pio run` auf dasselbe `.pio/build` brechen mit
@@ -86,39 +104,42 @@ Jedes Modul ist eine header-only Klasse in einem eigenen `lib/<Name>/` (kein `.c
 per `-I` in `platformio.ini` eingebunden. Neues Modul → Ordner anlegen **und** dort einen
 `-I`-Eintrag ergaenzen.
 
-Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `PinchGesture`,
-`PoseDetector`, `ScrollJoystick`, `ShakeToggle`, `OrientationPointer`, `Filters/`) kennen
+Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `TwistToggle`,
+`TwistGuard`, `PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `Filters/`) kennen
 weder Hardware noch das EI-SDK. Beides ist auf `ImuReader`, `MouseHID`, `Haptic` und `PinchClassifier`
 beschraenkt. Diese Richtung beim Erweitern beibehalten — nichts aus `lib/ei-model` oder
 `bluefruit` gehoert in ein Policy-Modul.
 
 **`AirMouseState` (`lib/AirMouseState/`) haelt den gesamten Zustand** in zwei Achsen
-(`Power` / `Pose`) und fuehrt selbst nichts aus: jedes Ereignis (`onShake`, `onPose`,
-`onPinch`) liefert ein `Actions`-Struct zurueck, das der Controller in `apply()` — der
-einzigen Stelle mit Seiteneffekten — ausfuehrt. Neue Zustandslogik gehoert hierhin und
-braucht einen Test, kein zusaetzliches Flag im Controller.
+(`Power` / `Pose`) und fuehrt selbst nichts aus: jedes Ereignis (`onPower`, `onPose`,
+`onTwistHeld`, `onPinch`) liefert ein `Actions`-Struct zurueck, das der Controller in
+`apply()` — der einzigen Stelle mit Seiteneffekten — ausfuehrt. Neue Zustandslogik
+gehoert hierhin und braucht einen Test, kein zusaetzliches Flag im Controller.
 
-**Die Haltung waehlt, was ein Pinch bedeutet:** `Point` → Linksklick, `Idle` → Rechtsklick,
-`Scroll` → wirkungslos. Der Pinch selbst ist zustandslos, er veraendert im Automaten
+**Die Haltung waehlt, was ein Pinch bedeutet:** `Point` → Linksklick, `Idle` (nur das
+Waagrecht-Gate, keine Verdrehungs-Bandbreite mehr) → nichts, `Turned` → Rechtsklick bei
+ruhig gehaltener Neigung. Der Pinch selbst ist zustandslos, er veraendert im Automaten
 nichts — auch das ist getestet.
 
 **Es gibt bewusst keine `Grab`-Achse und kein Ziehen.** Zwei Anlaeufe dazu sind wieder
 ausgebaut worden: der Doppel-Pinch brauchte ein Wartefenster, das auf *jedem* gewoehnlichen
 Klick lag; Pinch-plus-Abdrehen kollidierte mit dem Rechtsklick auf derselben Geste.
 Solange nichts eine Taste gedrueckt haelt, waere ein Zustand dafuer nur Ballast — und die
-Invariante „nie mit gedrueckter Taste abschalten" waere leer. `lib/PinchGesture/` ist aus
-demselben Grund unbenutzt und nicht mehr im Build (der Ordner liegt noch auf der Platte).
-Kommt das Ziehen spaeter ueber eine 180-Grad-Drehung zurueck, gehoert dazu wieder eine
-eigene Achse mit dieser Invariante und einem Test dafuer.
+Invariante „nie mit gedrueckter Taste abschalten" waere leer. Kommt das Ziehen spaeter
+ueber eine 180-Grad-Drehung zurueck, gehoert dazu wieder eine eigene Achse mit dieser
+Invariante und einem Test dafuer.
 
 `AirMouseController` verdrahtet nur noch: Ereignisse einsammeln → FSM fragen → `apply()`.
 Ablauf pro Tick:
 
-1. `ShakeToggle` — zwei Gyro-Spitzen im richtigen Abstand erzeugen `onShake()`.
-   Beim Einschalten setzt `Actions::resetPose` die Haltung auf `Point` zurueck — der
-   Nullpunkt der Verdrehung ist dagegen fest (`cfg::TWIST_NEUTRAL_DEG`) und wird *nicht*
-   beim Einschalten kalibriert: das geschieht direkt nach dem Schuetteln, wo die
-   Lageschaetzung am staerksten gestoert ist, und ergab jedes Mal einen anderen Bezug.
+1. `TwistToggle` — die Ein/Aus-Geste ersetzt das fruehere Schuetteln: Unterarm um rund
+   90 Grad abdrehen und innerhalb einer Sekunde zurueck schaltet ein oder aus
+   (`TwistEvent::Toggle`), laenger gehalten wird daraus der Scroll-Modus
+   (`TwistEvent::Held`). Beim Einschalten setzt `Actions::resetPose` die Haltung auf
+   `Point` zurueck — der Nullpunkt der Verdrehung ist dagegen fest
+   (`cfg::TWIST_NEUTRAL_DEG`) und wird *nicht* beim Einschalten kalibriert: das geschah
+   frueher direkt nach dem Schuetteln, wo die Lageschaetzung am staerksten gestoert war,
+   und ergab jedes Mal einen anderen Bezug.
 2. `MadgwickAHRS` — Lage aus Gyro+Accel; liefert `upX/upY/upZ`, die Richtung von "oben"
    im Koerperkoordinatensystem. Bewusst **kein** `rollDeg()`/`pitchDeg()` mehr, siehe
    unten.
@@ -126,20 +147,24 @@ Ablauf pro Tick:
    die Unterarmachse) und `elevDeg` (Neigung des Unterarms aus der Waagerechten). Der
    Controller rechnet sie einmal pro Tick und verteilt sie — kein Modul holt sich seinen
    Winkel mehr selbst.
-3. `PoseDetector` — die Verdrehung gegen `TWIST_NEUTRAL_DEG` waehlt `Point` / `Idle` /
-   `Scroll`, die
-   **absolute** Armneigung ist ein vorgeschaltetes Gate: ausserhalb `LEVEL_MAX_DEG` gibt
-   es nur `Idle`, egal wie die Hand steht. Geglaettet (`MODE_TAU`) + Haltezeit
+3. `PoseDetector` — das **Waagrecht-Gate** (`LEVEL_MAX_DEG`, Hysterese `LEVEL_HYST_DEG`)
+   entscheidet zuerst: ausserhalb gibt es nur `Idle`, egal wie die Hand steht. Erst
+   innerhalb des Gates waehlt die geglaettete Verdrehung gegen `TWIST_NEUTRAL_DEG`
+   zwischen `Point` und `Turned` — `Idle` ist also keine Zone der Verdrehung mehr,
+   sondern allein das Ergebnis des Gates. Geglaettet (`MODE_TAU`) + Haltezeit
    (`MODE_DWELL_MS`) + Hysterese (auch auf dem Gate), sonst springt die Haltung mitten in
    einer schnellen Bewegung um. Zusaetzlich wird waehrend heftiger Bewegung
    (`POSE_STILL_DPS`, plus `POSE_CALM_MS` Ruhezeit danach) gar nicht erst entschieden —
-   ohne das reisst schon das Einschalt-Schuetteln die Erkennung durch `Idle` bis `Scroll`,
-   samt Haptik und Zeiger-Reset. Die Winkel laufen dabei weiter mit, nur die Entscheidung
-   ruht.
+   ohne das reisst schon eine zuegige 90-Grad-Drehung die Erkennung durch `Idle` bis
+   `Turned`, samt Haptik und Zeiger-Reset. Die Winkel laufen dabei weiter mit, nur die
+   Entscheidung ruht.
 4. Klick-Pfad: `VibrationEnvelope` (Hochpass 30 Hz → Betrag → Tiefpass 15 Hz) → bi-level
    Gate (`ENV_ON`/`ENV_OFF`) in `PinchDetector` → bei offenem Gate ML-Inferenz in
    `PinchClassifier` → direkt `fsm_.onPinch()`, ohne Zwischenstufe; welche Taste daraus
-   wird, entscheidet dort die Haltung.
+   wird, entscheidet dort die Haltung. Eine Erschuetterung ueber `ENV_ON` verbraucht
+   dabei auch eine laufende Ausdrehung (`twistToggle_.cancel()`) — sie war ein Pinch und
+   keine Schaltgeste, sonst wuerde ein verpasster Pinch beim Zurueckdrehen die Maus
+   abschalten statt rechtszuklicken.
    `PinchDetector::tick()` bekommt den Klassifikator als Callable uebergeben und ruft
    ihn per Kurzschlussauswertung nur bei offenem Gate — deshalb kennt die Policy das
    EI-SDK nicht und die Inferenz laeuft nicht in jedem Takt.
@@ -147,7 +172,13 @@ Ablauf pro Tick:
    *bezogen auf den Raum* (Roll-Kompensation, `USE_ROLL_COMP`) → Deadzone → 1-Euro-Filter
    → Beschleunigung → Pixel; im Controller akkumuliert und alle `MOVE_INTERVAL_US` als
    int8 verschickt. Ohne die Kompensation laeuft der Cursor bei verdrehter Hand schraeg;
-   bei `twist = 0` sind beide Pfade identisch.
+   bei `twist = 0` sind beide Pfade identisch. `TwistGuard` blendet die Bewegung
+   waehrend einer Unterarmdrehung aus, damit die Drehgeste sich zielen laesst, ohne dass
+   der Cursor dabei querlaeuft. Seine Rate kommt aus der Lageschaetzung
+   (Differenz von `arm::twistDeg` zum Vortakt) und nicht aus `gy`: die Unterarmachse
+   faellt nicht exakt mit einer Platinenachse zusammen, eine Verdrehung leckt deshalb
+   auch in `gx` und `gz` und ein einzelner Gyro-Kanal wuerde sie nicht vollstaendig
+   erfassen.
 6. `ScrollJoystick` — im Scroll-Modus zaehlt die *gehaltene* Armneigung relativ zum
    Eintrittswinkel (Positionssignal, driftet nicht), nicht die Drehrate.
 
@@ -189,6 +220,11 @@ Die Kanal-Reihenfolge steht **nur** in `feat::pack()` (`lib/PinchFeatures/`). So
 `COLLECT_MODE` in `main.cpp` als auch das Inferenz-Fenster in `PinchClassifier` gehen
 durch diese Funktion. Eine Aenderung dort macht jedes bisher trainierte Modell ungueltig
 — und sie ist der einzige Ort, an dem das passieren kann.
+
+Die Kanaele 2–4 fuehren die **lineare** Beschleunigung (`lax/lay/laz`, Erdbeschleunigung
+in `ImuReader` per Tiefpass herausgerechnet), nicht die rohen Achsen. Damit ist die
+Handhaltung fuer das Modell unsichtbar — der Pinch sieht in Zeige- und in abgedrehter
+Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
 
 ## Konventionen
 

@@ -100,7 +100,7 @@ unruhigsten Moment genommen werden. Taugt als Beispiel für Kap. 6.
 
 ## Messungen am Gerät (Firmware ist dafür bereit)
 Die Teleplot-Ausgabe in `AirMouseController::debug()` ist in Sätze aufgeteilt
-(`DEBUG_SET` in `config.h`): immer `on`/`pose`/`drag`, dazu `DEBUG_PINCH`
+(`DEBUG_SET` in `config.h`): immer `on`/`pose`/`tw`, dazu `DEBUG_PINCH`
 (`env`, `gate`, `p_ml`, `click`, `gsum`, `nDeb`, `nGyro`, `ei_err`, `ei_us`),
 `DEBUG_POINT` (`gx/gy/gz`, `rx`, `ry`, `pacc`, `accx`, `mvfail`, `twist`, `elev`,
 `rtwist`, `level`, `srate`) oder `DEBUG_ORIENT` (zusätzlich `ax/ay/az` roh,
@@ -123,9 +123,6 @@ Die Teleplot-Ausgabe in `AirMouseController::debug()` ist in Sätze aufgeteilt
   `cfg::PINCH_GYRO_GUARD` steht auf 100. Eingezoomt nachschauen, ob die `gsum`-Spitze
   zum Zeitpunkt der `env`-Spitze schon abgeklungen ist. Wenn nicht, blockiert der
   Guard genau die Klicks, die er durchlassen soll.
-- [ ] **Schüttel-Schwelle:** `cfg::SHAKE_ON` = 350 gegen einen echten Aktivierungs-
-  Versuch prüfen; im normalen Gebrauch erreicht `gsum` nur ~250.
-
 ## DRINGEND: Abtastrate von Training und Inferenz stimmt nicht überein
 Das Modell erwartet **209 Hz** (`EI_CLASSIFIER_INTERVAL_MS = 4.785`). Der Inferenz-Pfad
 läuft jetzt genau darauf (`cfg::SAMPLE_INTERVAL_US = 4785`, per `static_assert` gesichert).
@@ -154,9 +151,6 @@ g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o build/fsm.exe test/test_sta
   die *Erkenner* die richtigen Ereignisse liefern.
 - [ ] **Scroll-Schwelle:** `SCROLL_ON_DEG` steht auf 70°, die Geste ist 90°.
   Falls der Scroll-Modus zu früh anspringt, auf 75–80 anheben.
-- [ ] **Doppel-Pinch-Fenster:** `DOUBLE_MS` = 500 ms gegen die eigene Tippgeschwindigkeit
-  prüfen (Kanal `click`). Zu kurz = Drag startet nicht, zu lang = zwei getrennte
-  Klicks werden als Drag gedeutet.
 
 ## Inferenzzeit messen (Compiler-Flags umgestellt)
 `-O1` → `-O2`, CMSIS-DSP und CMSIS-NN eingeschaltet. Im Binary nachgewiesen:
@@ -207,9 +201,6 @@ gerade = zeigen, abgedreht = nichts, nach aussen gedreht = Scroll-Joystick.
   in der Zeige-Haltung links, in der Scroll-Haltung nichts. Prüfen, ob sich das Idle-Band
   beim Pinchen zuverlässig halten lässt – dafür wurde `SCROLL_ON_DEG` von 70 auf 85
   angehoben, das Band ist damit 40° statt 25° breit.
-- [ ] **Drag and Drop (offen, Idee):** über eine 180°-Drehung des Handgelenks. Dafür
-  kommt eine eigene Zustandsachse zurück, samt der Invariante „Power::Off ⟹ Taste frei"
-  und einem Test dafür – die aktuelle Fassung hat bewusst keine.
 - [ ] **Twist-Guard gegen den Haltungs-Modus abwägen:** Beide unterdrücken Bewegung
   beim Drehen. Prüfen, ob der Guard beim normalen Zeigen fälschlich anschlägt
   (Kanal `twist`) – dann `TWIST_K` erhöhen oder `USE_TWIST_GUARD false`.
@@ -217,3 +208,52 @@ gerade = zeigen, abgedreht = nichts, nach aussen gedreht = Scroll-Joystick.
 **Für die Arbeit:** Die Roll-Kompensation taugt als Ausblick (8.2), solange nur der
 Twist-Guard aktiv ist – „das aktuelle System unterdrückt Unterarm-Rotation, kompensiert
 sie aber noch nicht".
+
+## Aufnahmeprotokoll für den neuen Datensatz
+
+Gilt ab der gravitationsfreien Kanalbelegung (`lax/lay/laz` statt `ax/ay/az`).
+Die alten CSV sind doppelt ungültig: mit 100 Hz statt 209 Hz aufgenommen **und**
+mit den rohen Achsen.
+
+- Werkzeug: `edge-impulse-data-forwarder`, 115200 Baud. Fünf Achsen in der
+  Reihenfolge von `feat::pack()`: `env, gyro, lax, lay, laz`.
+- Die vom Forwarder gemeldete Frequenz gegen 209 Hz prüfen. Weicht sie ab oder
+  leuchtet die eingebaute LED, **nicht aufnehmen** – die LED bleibt ab dem
+  ersten verpassten Abtastschritt bis zum Reset an.
+- Klassen: `pinch`, `idle`, `negative`.
+- Hard Negatives ausdrücklich mitnehmen (Xu et al. 2022): Tastaturtippen,
+  Klopfen auf den Tisch, Klatschen, Türklinke, Gehen.
+- **Validierung der Haltungsunabhängigkeit:** der Grossteil der `pinch`-Daten in
+  Zeige-Haltung; zusätzlich ein Satz Pinches in der abgedrehten Haltung, der
+  **nur ins Test-Set** kommt. Fällt die Genauigkeit dort nicht ab, ist die
+  Gravitationsfreiheit belegt – eine belastbare Zahl für Kap. 5 und zugleich die
+  Erklärung, warum der Rechtsklick vorher nicht funktionierte.
+
+## Messplan am Gerät (nach der UX-Überarbeitung)
+
+Schritte 1–7 mit `USE_ML_PINCH false`, damit ein Fehlverhalten nicht dem Modell
+zugeschrieben wird, das gar nicht die Ursache ist.
+
+1. `ovr` – hält die Schleife den Takt?
+2. `gx/gy/gz` im Stillstand über 30 s, dann eine bewusst langsame Zeigebewegung
+   über ~10 s: die Rate darf nicht wegsacken (Bias-Fix).
+3. `accx`, `mvfail` bei schneller Bewegung: Rückstau muss nach dem Anhalten
+   sofort auf null gehen.
+4. `rx`/`ry` gegen `gx`/`gz`, Hand ruhig gehalten – die Restamplitude ist das
+   Wackeln. Erst `EURO_BETA = 0` und `EURO_MIN_CUTOFF` senken, dann `BETA` über
+   0.1 / 0.2 / 0.4 anheben, zuletzt `ACCEL_K` 0 gegen 2.0 halten. Ein 3-Tap-
+   Median vor der Deadzone nur, falls danach etwas übrig bleibt.
+5. `rtwist` in ruhiger Zeige-Haltung: steht es bei 0? Sonst `TWIST_NEUTRAL_DEG`
+   nachziehen – alle folgenden Schwellen hängen daran.
+6. `rtwist`, `on`, `tw`, `tg`, `tgr`, `pose`, `dpose` bei der Ein/Aus-Geste:
+   schaltet sie zuverlässig? Schaltet sie **nicht** beim Rechtsklick und
+   **nicht** nach dem Scrollen? Steht der Cursor während der ganzen Drehung
+   still – `tg` muss auf 0 gehen, bevor `rtwist` nennenswert läuft?
+   `TURN_ON_DEG`, `TwistTuning::backDeg`/`maxMs` und `TwistGuardTuning::lowDps`/
+   `highDps`/`releaseS` nachziehen. Zu hohes `lowDps` = der Cursor läuft beim
+   Hindrehen weg; zu niedriges = normales Zeigen mit leicht mitdrehender Hand
+   wird abgewürgt.
+7. `srate` und `click` in `Turned`: Rechtsklick bei ruhig gehaltener Neigung,
+   kein Klick während des Scrollens, Joystick erst nach einer Sekunde.
+8. Erst jetzt `USE_ML_PINCH true`, nach der Neuaufnahme: `env`, `gate`, `p_ml`
+   beim Pinchen in beiden Haltungen.

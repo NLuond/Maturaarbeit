@@ -13,9 +13,9 @@
 // Schleife dehnt genau das ML-Fenster, das man gerade untersucht. Fuer eine
 // gezielte Messung deshalb auf die passende Gruppe stellen.
 #define DEBUG_ALL       0
-#define DEBUG_PINCH     1   // env, gate, p_ml, click, gsum, nDeb, nGyro, drag
+#define DEBUG_PINCH     1   // env, gate, p_ml, click, gsum, nDeb, nGyro
 #define DEBUG_POINT     2   // gx/gy/gz, rx, ry, pacc, accx, mvfail, twist, elev,
-                            // rtwist, level, srate
+                            // rtwist, level, srate, tg, tgr
 // DEBUG_ORIENT prueft die Einbaulage nach und steht bewusst neben DEBUG_ALL,
 // nicht darin: er teilt gx/gy/gz und twist/elev mit DEBUG_POINT.
 #define DEBUG_ORIENT    3   // ax/ay/az roh + gvx/gvy/gvz geglaettet, angX/angY/angZ,
@@ -235,14 +235,18 @@ namespace cfg {
 
     // Waehrend einer heftigen Bewegung wird die Haltung gar nicht erst
     // gewechselt. Glaettung, Haltezeit und Hysterese daempfen die Ausschlaege
-    // nur - beim Einschalt-Schuetteln reicht das nicht: gemessen laeuft die
-    // Verdrehung dabei ueber 70 Grad, der Detektor durchlaeuft also Idle bis
-    // Scroll, mit Haptik und Zeiger-Reset als Nebenwirkung.
+    // nur; eine gehaltene Haltung ist aber per Definition nichts, was man
+    // mitten im Schwung einnimmt.
     //
-    // Die Schwelle liegt ueber den ~250 Grad/s des normalen Gebrauchs und unter
-    // SHAKE_ON. Die Ruhezeit danach ist noetig, weil gyroSum zwischen den beiden
-    // Schuettel-Spitzen kurz einbricht - ohne sie waere das Fenster dazwischen
-    // wieder offen.
+    // Die Schwelle lag frueher zwischen dem normalen Gebrauch (~250 Grad/s) und
+    // der Schuettel-Schwelle. Die Obergrenze ist mit dem Schuetteln
+    // weggefallen, der Wert steht also nur noch auf einem Bein und gehoert am
+    // Geraet gegengeprueft.
+    //
+    // Wichtig: eine zuegige 90-Grad-Drehung erzeugt rund 300 Grad/s und friert
+    // damit die Haltungsentscheidung ein. TwistToggle arbeitet deshalb auf dem
+    // Winkel und nicht auf pose() - die Winkel laufen waehrend der Sperre
+    // weiter, nur die Entscheidung ruht.
     constexpr float    POSE_STILL_DPS = 300.f;
     constexpr uint32_t POSE_CALM_MS   = 250;
 
@@ -273,13 +277,11 @@ namespace cfg {
     // 0.8 Hz trennt beides, ohne die Anzeige traege zu machen.
     constexpr float GRAVITY_LP_HZ = 0.8f;
 
-    // --- Ein/Aus durch Schuetteln ---------------------------------------
-    constexpr float    SHAKE_ON         = 350.f;
-    constexpr float    SHAKE_OFF        = 180.f;
-    constexpr uint32_t SHAKE_REFRACT_MS = 80;
-    constexpr uint32_t SHAKE_GAP_MIN_MS = 100;
-    constexpr uint32_t SHAKE_GAP_MAX_MS = 450;
-    constexpr uint32_t SHAKE_LOCKOUT_MS = 800;
+    // --- Ein/Aus durch die Drehgeste ------------------------------------
+    // Die Parameter stehen in TwistTuning (lib/TwistToggle/TwistToggle.h) und
+    // bewusst nicht hier: der Header muss sich ohne Toolchain uebersetzen
+    // lassen, damit test/test_twist_toggle.cpp auf dem PC laeuft - dieselbe
+    // Ausnahme wie bei ArmOrientation und PointerTuning.
 
     // --- Haptik und Debug -----------------------------------------------
     constexpr int      HAPTIC_PIN = D1;
