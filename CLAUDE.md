@@ -71,7 +71,7 @@ Es gibt keine Laufzeit-Konfiguration. Alle Betriebsarten sind `#define`s ganz ob
 
 | Schalter | Wirkung |
 |---|---|
-| `COLLECT_MODE` | `main.cpp` sendet statt HID nur CSV (`env,gyro/100,ax,ay,az`) fuer Edge Impulse. HID/Controller werden gar nicht erst initialisiert. |
+| `COLLECT_MODE` | `main.cpp` sendet statt HID nur CSV (`env,gyro/100,lax,lay,laz`) fuer Edge Impulse. HID/Controller werden gar nicht erst initialisiert. |
 | `DEBUG_TELEPLOT` | Teleplot-Kanaele (`>name:wert`) aus `AirMouseController::debug()`. Kostet Serial-Bandbreite und bremst die Schleife — fuer echte Nutzungstests aus. |
 | `USE_ML_PINCH` | ML-Klassifikator gegen reine Schwellwert-Erkennung (`envGate`). |
 | `USE_BLE_HID` | BLE (bluefruit) gegen USB-HID (TinyUSB) in `MouseHID.h`. |

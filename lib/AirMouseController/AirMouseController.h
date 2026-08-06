@@ -30,6 +30,19 @@
 // Kein Zustandsbit liegt ausserhalb von AirMouseState. Das war vorher anders -
 // airmouseOn_ und lastMode_ lagen hier verstreut und mussten von Hand
 // synchron gehalten werden.
+
+// TwistToggle und PoseDetector entscheiden ueber dieselbe koerperliche
+// Schwelle, halten ihre Werte aber getrennt: TwistTuning muss ohne config.h
+// uebersetzbar bleiben, damit der PC-Test laeuft. Ein Auseinanderdriften gaebe
+// keinen Compilerfehler, sondern eine Maus, die in der abgedrehten Haltung
+// links klickt - deshalb hier festgenagelt.
+constexpr TwistTuning kTwistDefaults{};
+static_assert(kTwistDefaults.onDeg == cfg::TURN_ON_DEG,
+              "TwistToggle::onDeg und cfg::TURN_ON_DEG meinen dieselbe Schwelle");
+static_assert(kTwistDefaults.backDeg < cfg::TURN_OFF_DEG &&
+              cfg::TURN_OFF_DEG < cfg::TURN_ON_DEG,
+              "Reihenfolge backDeg < TURN_OFF_DEG < TURN_ON_DEG verletzt");
+
 class AirMouseController {
 public:
     explicit AirMouseController(MouseHID& mouse)
@@ -68,8 +81,10 @@ public:
         // Der Haltungs-Detektor laeuft immer, auch im Ruhezustand: seine
         // Glaettung ist beim Einschalten dann schon eingeschwungen statt bei
         // null, und die Drehgeste braucht den geglaetteten Winkel gerade dann,
-        // wenn die Maus noch aus ist.
-        const Pose posed = pose_.update(twist_, elev_, s.gyroSum, dt, now_ms);
+        // wenn die Maus noch aus ist. Der Rueckgabewert wird nicht hier
+        // festgehalten, sondern unten frisch ueber pose_.pose() gelesen -
+        // siehe Kommentar dort.
+        pose_.update(twist_, elev_, s.gyroSum, dt, now_ms);
 
         // Eine Erschuetterung ueber der env-Schwelle verbraucht die laufende
         // Ausdrehung: sie war ein Pinch und keine Schaltgeste. Absichtlich an
@@ -89,7 +104,12 @@ public:
         if (fsm_.on()) {
             // Haltung vor Pinch: welche Taste ein Pinch ausloest, haengt an der
             // Haltung, und die soll im selben Takt schon die aktuelle sein.
-            apply(fsm_.onPose(posed), now_ms);
+            // pose_.pose() statt eines oben gemerkten Werts: onPower() kann in
+            // diesem Takt schon vor uns gelaufen sein (Zeile weiter oben) und
+            // ueber apply()/a.resetPose die Haltung zurueckgesetzt haben - ein
+            // gemerkter Wert waere dann fuer einen Takt falsch und liesse die
+            // Maus kurz in der alten Haltung starten.
+            apply(fsm_.onPose(pose_.pose()), now_ms);
             handlePinch(s, env, now_ms);
         }
 
@@ -174,7 +194,15 @@ private:
         const bool pinched = pinch_.tick(env, s.gyroSum, now_ms,
                                          [this] { return ml_.ready() && ml_.isPinch(); });
 
-        if (pinched) apply(fsm_.onPinch(scroll_.inDeadzone()), now_ms);
+        if (pinched) {
+            // TwistToggle sieht den Arm koerperlich frueher als draussen als
+            // die FSM-Pose (die erst nach POSE_CALM_MS + MODE_DWELL_MS +
+            // MODE_TAU ankommt) - state() 1/2 heisst "gerade ausgedreht", auch
+            // wenn schon verbraucht (2). Siehe AirMouseState::onPinch.
+            const uint8_t tw = twistToggle_.state();
+            const bool armOut = (tw == 1) || (tw == 2);
+            apply(fsm_.onPinch(scroll_.inDeadzone(), armOut), now_ms);
+        }
     }
 
     void handlePointing(const ImuSample& s, float dt, uint32_t now_us) {

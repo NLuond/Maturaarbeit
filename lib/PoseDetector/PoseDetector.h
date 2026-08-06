@@ -33,15 +33,17 @@ public:
     }
 
     Pose update(float twistDeg, float elevDeg, float gyroSum, float dt, uint32_t now_ms) {
-    #if !USE_POSE_MODE
-        (void)twistDeg; (void)elevDeg; (void)gyroSum; (void)dt; (void)now_ms;
-        rel_ = 0.f; fElev_ = 0.f; level_ = true; relSlow_ = 0.f;
-        return pose_ = Pose::Point;
-    #else
         // Erst glaetten: beide Winkel schwanken beim normalen Zeigen um mehrere
         // zehn Grad, teils weil das Handgelenk mitdreht, teils weil Madgwick bei
         // schnellen Bewegungen von der Linearbeschleunigung gestoert wird. Ohne
         // Glaettung wuerde die Haltung mitten in der Bewegung umspringen.
+        //
+        // Das laeuft unabhaengig von USE_POSE_MODE: TwistToggle liest
+        // relTwistDeg() direkt, ohne ueber die Klassifikation unten zu gehen.
+        // Wuerden die Winkel hier auf null gehalten, saehe die Ein/Aus-Geste die
+        // Drehung nie - "Haltungserkennung aus" darf nur heissen, dass die
+        // KLASSIFIKATION dauerhaft Point liefert, nicht dass die Winkelplumbing
+        // stillsteht.
         const float a = 1.f - expf(-dt / cfg::MODE_TAU);
         fTwist_ = wrapDeg(fTwist_ + a * wrapDeg(twistDeg - fTwist_));
         fElev_ += a * (elevDeg - fElev_);
@@ -55,15 +57,21 @@ public:
 
         // Waagrecht-Gate mit eigener Hysterese, sonst flattert es genau an der
         // Schwelle - und ein Flattern hier wuerde die ganze Haltung mitreissen.
+        // Auch dieses Gate bleibt in Betrieb: TwistToggle bekommt level() als
+        // zweite Bedingung, unabhaengig von USE_POSE_MODE.
         const float tilt = fabsf(fElev_);
         if (level_) { if (tilt > cfg::LEVEL_MAX_DEG)                          level_ = false; }
         else        { if (tilt < cfg::LEVEL_MAX_DEG - cfg::LEVEL_HYST_DEG)    level_ = true;  }
 
+    #if !USE_POSE_MODE
+        (void)gyroSum; (void)now_ms;
+        return pose_ = Pose::Point;
+    #else
         // Waehrend einer heftigen Bewegung bleibt die Haltung stehen. Die
         // Winkel oben laufen weiter mit - nur entschieden wird nichts. Eine
         // gehaltene Haltung ist per Definition nichts, was man mitten im
-        // Schwung einnimmt, und das Einschalt-Schuetteln reisst die Erkennung
-        // sonst durch Idle bis Turned.
+        // Schwung einnimmt, und die zuegige Ein/Aus-Drehung (TwistToggle)
+        // reisst die Erkennung sonst durch Idle bis Turned.
         if (gyroSum > cfg::POSE_STILL_DPS) tMoving_ = now_ms;
         if (now_ms - tMoving_ < cfg::POSE_CALM_MS) {
             // Haltezeit neu anlaufen lassen, sonst waere sie in dem Moment,

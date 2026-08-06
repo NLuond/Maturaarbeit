@@ -1,8 +1,7 @@
 // Test der Kanalbelegung des Modells. Laeuft auf dem PC - PinchFeatures.h und
 // ImuSample.h haengen bewusst an keiner Hardware.
 //
-//   g++ -std=c++14 -Wall -Wextra -I lib/ImuReader -I lib/PinchFeatures \
-//       -o build/feat.exe test/test_pinch_features.cpp && ./build/feat.exe
+//   g++ -std=c++14 -Wall -Wextra -I lib/ImuReader -I lib/PinchFeatures -o build/feat.exe test/test_pinch_features.cpp && ./build/feat.exe
 //
 // Warum es diesen Test gibt: die Kanal-Reihenfolge steht nur an dieser einen
 // Stelle, und eine dort vertauschte Achse gibt weder Compiler- noch

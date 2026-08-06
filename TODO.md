@@ -84,16 +84,14 @@ unruhigsten Moment genommen werden. Taugt als Beispiel für Kap. 6.
   Handgelenk bestimmen und machte bei falscher Einstellung den Scroll-Modus
   unerreichbar, ohne dass man es der Konfiguration ansah. `classify()` vergleicht jetzt
   den **Betrag** der Verdrehung: aus der Zeige-Haltung heraus sind ~90 ° Supination, aber
-  nur 10–30 ° Pronation möglich, `SCROLL_ON_DEG` ist also anatomisch ohnehin nur in einer
+  nur 10–30 ° Pronation möglich, `TURN_ON_DEG` ist also anatomisch ohnehin nur in einer
   Richtung erreichbar.
-- [ ] **`SCROLL_ON_DEG` (70):** erreichbar, da über 100 gemessen. Prüfen, ob 70 bequem
+- [ ] **`TURN_ON_DEG` (70):** erreichbar, da über 100 gemessen. Prüfen, ob 70 bequem
   oder anstrengend ist.
-- [ ] **`POINT_MAX_DEG` (45):** Streuung beim *normalen* Zeigen dagegen halten – Zeigen
-  darf nicht abbrechen.
 - [ ] **`LEVEL_MAX_DEG` (35 °) einstellen:** `level` muss beim normalen Zeigen dauerhaft
   1 sein und erst bei hängendem oder angehobenem Arm auf 0 fallen. Zu eng = die Maus
   fällt beim Zeigen aus, zu weit = die Bedingung greift nie.
-- [ ] **`SENS_X/Y` gegenprüfen:** von 100 auf 160 px/Grad angehoben. Nach dem Wegfall
+- [ ] **`SENS_X/Y` gegenprüfen:** von 100 auf 110 px/Grad angehoben. Nach dem Wegfall
   der falschen Y-Ausblendung kann das jetzt zu viel sein – erst so messen, dann
   entscheiden (Casiez et al. 2008: zu niedrig schadet klar, zu hoch kaum).
 - [ ] **`mvfail`** beobachten – steigt der Zähler, gehen Pakete an BLE verloren.
@@ -112,13 +110,17 @@ Die Teleplot-Ausgabe in `AirMouseController::debug()` ist in Sätze aufgeteilt
   (~550 ms), nicht den kurzen Kontakt-Impuls.
 - [x] ~~**Twist-Achse verifizieren**~~ – erledigt, siehe Abschnitt „vertauschte
   Lagewinkel" oben. Die Unterarmachse ist **Y**, `gy` verwirft der Zeiger ersatzlos.
-- [ ] ~~**Twist-Guard einstellen**~~ – hinfällig. `USE_TWIST_GUARD`, `USE_ROLL_COMP`,
-  `TWIST_K` und `TWIST_MIN_DPS` gibt es in `config.h` nicht mehr; die Aufgabe erledigt
-  jetzt der Haltungs-Modus.
-- [ ] **Bi-Level-Schwelle einstellen:** `cfg::ENV_OFF` (aktuell 0.012) prüfen. Zu nah an
-  `ENV_ON` → Hysterese wirkungslos; zu tief → zweiter Pinch wird verschluckt.
-  Aus der ersten Aufnahme: Untergrund ~0.005–0.02, echte Pinches 0.045–0.125.
-  Vorschlag `ENV_ON` 0.035 / `ENV_OFF` 0.020 – am Kanal `gate` gegenprüfen.
+- [ ] **Twist-Guard einstellen:** `TWIST_K` und `TWIST_MIN_DPS` gibt es nicht mehr, aber
+  der Guard selbst ist zurück als eigenes Modul (`lib/TwistGuard/`, kein
+  `USE_TWIST_GUARD`-Schalter – er läuft immer mit). Parameter stehen in
+  `TwistGuardTuning` (`lowDps`/`highDps`/`rateTau`/`releaseS`), am Kanal `tg`/`tgr`
+  gegenprüfen, ob er beim normalen Zeigen fälschlich anschlägt. `USE_ROLL_COMP` ist
+  ein eigener, aktiver Schalter für die Roll-Kompensation im Zeiger (siehe
+  `CLAUDE.md`) und unabhängig vom Guard – beide unterdrücken die Verdrehung im
+  Zeiger, aber auf unterschiedliche Art.
+- [x] **Bi-Level-Schwelle eingestellt:** `cfg::ENV_ON` = 0.035 / `cfg::ENV_OFF` = 0.020.
+  Aus der ersten Aufnahme: Untergrund ~0.005–0.02, echte Pinches 0.045–0.125. Am Kanal
+  `gate` gegenprüfen, ob die Hysterese noch stimmt.
 - [ ] **Gyro-Guard prüfen:** Bei jedem Pinch schiesst `gsum` auf 200–250, aber
   `cfg::PINCH_GYRO_GUARD` steht auf 100. Eingezoomt nachschauen, ob die `gsum`-Spitze
   zum Zeitpunkt der `env`-Spitze schon abgeklungen ist. Wenn nicht, blockiert der
@@ -150,8 +152,8 @@ g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o build/fsm.exe test/test_sta
 - [ ] **Am Gerät gegenprüfen:** Kanäle `on`, `pose` (0=Point, 1=Idle, 2=Turned)
   im Teleplot. Der Automat ist bewiesen korrekt – offen ist nur, ob
   die *Erkenner* die richtigen Ereignisse liefern.
-- [ ] **Scroll-Schwelle:** `SCROLL_ON_DEG` steht auf 70°, die Geste ist 90°.
-  Falls der Scroll-Modus zu früh anspringt, auf 75–80 anheben.
+- [ ] **Ausdreh-Schwelle:** `TURN_ON_DEG` steht auf 70°, die Geste ist ~90°.
+  Falls die abgedrehte Haltung zu früh anspringt, auf 75–80 anheben.
 
 ## Inferenzzeit messen (Compiler-Flags umgestellt)
 `-O1` → `-O2`, CMSIS-DSP und CMSIS-NN eingeschaltet. Im Binary nachgewiesen:
@@ -175,40 +177,46 @@ g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o build/fsm.exe test/test_sta
   1-Euro-Filter und dem festen Tiefpass (`SMOOTH_TAU`). Beide Varianten gegen dieselbe
   Aufgabe messen – das ist ein fertiger Messabschnitt für Kap. 6.
 - [ ] **Verstärkung prüfen:** Casiez et al. 2008 zeigen, dass *zu niedrige* CD-Gain
-  klar schadet (mehr Nachfassen), zu hohe kaum. `SENS_X/Y` steht jetzt auf 160 px/Grad.
+  klar schadet (mehr Nachfassen), zu hohe kaum. `SENS_X/Y` steht jetzt auf 110 px/Grad.
 - [ ] **Beschleunigung hinterfragen:** Der Gewinn ist laut Literatur klein (3–6 %), und
   Scotto et al. 2020 fanden linear steigende Verstärkung *schlechter* als eine gute
   konstante. `ACCEL_K = 0` gegen den jetzigen Wert testen, bevor weiter optimiert wird.
 - [ ] **Latenz messen:** Degradation setzt schon ab ~16 ms ein (Friston et al. 2016).
-  Anteile: `MOVE_INTERVAL_US` = 16 ms Berichtsintervall + BLE-Verbindungsintervall
-  (neu auf 7.5–15 ms angefragt, die Gegenstelle darf ablehnen) + Filterverzögerung.
-  Casiez et al. 2012 rechnen mit nur 10–20 ms Budget fürs Filtern – prüfen, ob das
-  eingehalten wird.
+  Anteile: `MOVE_INTERVAL_US` = 9.57 ms Berichtsintervall über BLE (quantisiert auf
+  zwei Takte à 4.785 ms, siehe `config.h`) + BLE-Verbindungsintervall (7.5–15 ms
+  angefragt, die Gegenstelle darf ablehnen) + Filterverzögerung. Casiez et al. 2012
+  rechnen mit nur 10–20 ms Budget fürs Filtern – prüfen, ob das eingehalten wird.
 
 ## Haltungs-Modus und Scrollen (neu gebaut, muss eingestellt werden)
-Der Rollwinkel relativ zur Haltung beim Einschalten wählt die Betriebsart:
-gerade = zeigen, abgedreht = nichts, nach aussen gedreht = Scroll-Joystick.
+Die Verdrehung gegen den festen Bezugspunkt (`TWIST_NEUTRAL_DEG`) wählt die Haltung:
+gerade = zeigen (`Point`), abgedreht = Rechtsklick (`Turned`), nach einer Sekunde
+gehalten zusätzlich Scroll-Joystick über die Armneigung (`onTwistHeld`). Unabhängig
+davon erzwingt „nicht waagrecht" (`LEVEL_MAX_DEG`) immer `Idle` – nichts passiert,
+egal wie die Hand verdreht ist.
 
 - [x] ~~**Drehrichtung festlegen**~~ – hinfällig, `SCROLL_DIR` gibt es nicht mehr
   (Betragsvergleich, siehe oben).
-- [ ] **Umschaltpunkte einstellen:** `POINT_MAX_DEG` (45), `SCROLL_ON_DEG` (70) und
-  `MODE_HYST_DEG` (10) am Kanal `pose` nachziehen. Zeigen darf nicht abbrechen, wenn
-  man die Hand normal bewegt; die Scroll-Haltung muss bequem erreichbar bleiben.
-- [ ] **Scroll-Geschwindigkeit einstellen:** `SCROLL_GAIN` (0.45 Schritte/s pro Grad),
-  `SCROLL_MAX_HZ` (15) und `SCROLL_DEAD_DEG` (8) am Kanal `srate`. `SCROLL_INVERT`
+- [ ] **Umschaltpunkte einstellen:** `TURN_ON_DEG` (70) und `TURN_OFF_DEG` (55) am
+  Kanal `rtwist`/`pose` nachziehen. Zeigen darf nicht abbrechen, wenn man die Hand
+  normal bewegt; die abgedrehte Haltung muss bequem erreichbar bleiben.
+- [ ] **Scroll-Geschwindigkeit einstellen:** `SCROLL_GAIN` (1.2 Schritte/s pro Grad),
+  `SCROLL_MAX_HZ` (25) und `SCROLL_DEAD_DEG` (3) am Kanal `srate`. `SCROLL_INVERT`
   auf `-1.f`, falls die Scroll-Richtung verkehrt herum ist.
 - [x] ~~**Doppel-Pinch prüfen**~~ – entfallen, samt `DOUBLE_MS` und `lib/PinchGesture/`.
-- [ ] **Rechtsklick testen:** Pinch in der Idle-Haltung (Hand gedreht) löst rechts aus,
-  in der Zeige-Haltung links, in der Scroll-Haltung nichts. Prüfen, ob sich das Idle-Band
-  beim Pinchen zuverlässig halten lässt – dafür wurde `SCROLL_ON_DEG` von 70 auf 85
-  angehoben, das Band ist damit 40° statt 25° breit.
-- [ ] **Twist-Guard gegen den Haltungs-Modus abwägen:** Beide unterdrücken Bewegung
-  beim Drehen. Prüfen, ob der Guard beim normalen Zeigen fälschlich anschlägt
-  (Kanal `twist`) – dann `TWIST_K` erhöhen oder `USE_TWIST_GUARD false`.
+- [ ] **Rechtsklick testen:** Pinch in der Zeige-Haltung (`Point`) löst links aus, in
+  der abgedrehten Haltung (`Turned`) rechts, in `Idle` (Arm nicht waagrecht) nichts.
+  Zusätzlich prüfen, ob ein Pinch kurz nach dem Ausdrehen zuverlässig unterdrückt statt
+  fälschlich links geklickt wird (`armOut` in `AirMouseState::onPinch`, deckt das
+  Wartefenster `POSE_CALM_MS` + `MODE_DWELL_MS` + `MODE_TAU` ab).
+- [ ] **Twist-Guard gegen die Ein/Aus-Geste abwägen:** Beide unterdrücken Bewegung beim
+  Drehen. Prüfen, ob `TwistGuard` (`lib/TwistGuard/`, Kanäle `tg`/`tgr`) beim normalen
+  Zeigen fälschlich anschlägt – dann `TwistGuardTuning::lowDps` anheben.
 
-**Für die Arbeit:** Die Roll-Kompensation taugt als Ausblick (8.2), solange nur der
-Twist-Guard aktiv ist – „das aktuelle System unterdrückt Unterarm-Rotation, kompensiert
-sie aber noch nicht".
+**Für die Arbeit:** Roll-Kompensation (`USE_ROLL_COMP`) und Twist-Guard unterdrücken
+beide die Verdrehung im Zeiger, aber auf unterschiedliche Art – der Guard bremst die
+Bewegung während der Drehung ganz weg, die Kompensation rechnet die Verdrehung aus der
+Drehmatrix heraus, ohne die Bewegung selbst zu bremsen. Beide gegeneinander messen ist
+ein fertiger Abschnitt für Kap. 6, kein offener Ausblick mehr.
 
 ## Aufnahmeprotokoll für den neuen Datensatz
 

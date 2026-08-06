@@ -66,7 +66,7 @@ void loop() {
     const ImuSample s = imu.read(cfg::DT);
 
 #if COLLECT_MODE
-    // Muss dieselbe Rate und dieselben Kanaele liefern wie der Inferenz-Pfad,5
+    // Muss dieselbe Rate und dieselben Kanaele liefern wie der Inferenz-Pfad
     // sonst lernt das Modell auf anderen Daten, als es spaeter sieht. Die
     // Kanaele kommen deshalb aus feat::pack() - derselben Funktion, die zur
     // Laufzeit das Fenster fuer den Klassifikator fuellt.

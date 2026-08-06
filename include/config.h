@@ -162,15 +162,25 @@ namespace cfg {
     constexpr float ELEV_LIMIT = 45.f;
     constexpr float ELEV_FADE  = 12.f;
 
-    // Berichtsintervall zum Host. Ueber BLE bringt es nichts, kuerzer als das
-    // Verbindungsintervall zu senden - die Pakete warten dann nur in der
-    // Warteschlange. Ueber USB pollt der Host jede Millisekunde, dort ist die
-    // Halbierung ein direkter Latenzgewinn und verdoppelt zugleich die
-    // Obergrenze der uebertragbaren Geschwindigkeit (127 px je Bericht).
+    // Berichtsintervall zum Host. Die Pruefung laeuft im Haupttakt
+    // (now_us - lastMove_ < MOVE_INTERVAL_US), nicht per eigenem Timer -
+    // ein gewuenschter Wert rundet deshalb immer auf ein ganzzahliges
+    // Vielfaches von SAMPLE_INTERVAL_US (4785 us) auf. 5000 ergab so real
+    // 9570 us (zwei Takte), nicht die angenommenen 5000 - und der alte Wert
+    // 10000 ergab real 14355 us (drei Takte), die Umstellung war damit real
+    // Faktor 1.5, nicht 2, wie ein frueherer Kommentar hier behauptete. Die
+    // Werte unten sind so gewaehlt, dass die Aufrundung exakt aufgeht:
+    //
+    //   USB (kein Verbindungsintervall, Host pollt jede Millisekunde):
+    //     4000 us -> ein Takt  -> real 4785 us, jeder Tick ein Bericht.
+    //   BLE (Verbindungsintervall 7.5-15 ms, Gegenstelle darf ablehnen):
+    //     7500 us -> zwei Takte -> real 9570 us, am kurzen Ende des
+    //     Intervalls - kuerzer bringt nichts, die Pakete stauen sich dann
+    //     nur in der Warteschlange.
 #if USE_BLE_HID
-    constexpr uint32_t MOVE_INTERVAL_US = 10000;
+    constexpr uint32_t MOVE_INTERVAL_US = 7500;
 #else
-    constexpr uint32_t MOVE_INTERVAL_US = 5000;
+    constexpr uint32_t MOVE_INTERVAL_US = 4000;
 #endif
 
     // Wie viele Berichte hoechstens im selben Takt hintereinander gehen, um
@@ -287,9 +297,21 @@ namespace cfg {
     constexpr int      HAPTIC_PIN = D1;
     constexpr uint32_t HAPTIC_MS  = 40;
 
-    // Luecke zwischen zwei Impulsen desselben Musters. Sie ist zugleich die
-    // Ruhezeit nach einem Muster, bevor das naechste starten darf.
-    constexpr uint32_t HAPTIC_GAP_MS = 50;
+    // Luecke zwischen zwei Impulsen DESSELBEN Musters (perzeptiv: zwei Buzz
+    // muessen als getrennt spuerbar bleiben, nicht als ein langer).
+    constexpr uint32_t HAPTIC_GAP_MS  = 50;
+
+    // Ruhezeit NACH einem Muster, bevor das naechste starten darf - eine
+    // andere Rolle als HAPTIC_GAP_MS, obwohl beide frueher denselben Wert
+    // teilten. Das Zwei-Impuls-Muster dauert 2*HAPTIC_MS + HAPTIC_GAP_MS =
+    // 130 ms; mit HAPTIC_REST_MS = HAPTIC_GAP_MS (50) laege das Fenster bei
+    // exakt 180 ms, genau auf cfg::DEBOUNCE_MS, ohne jede Reserve. Da jeder
+    // der drei Phasenuebergaenge (busy_ frei, used_-Fenster, Debounce) erst
+    // im naechsten ~4.785-ms-Takt erkannt wird, addiert sich bis zu 3x
+    // Takt-Jitter (~14 ms) obendrauf - der zweite Buzz eines schnellen
+    // Doppel-Rechtsklicks faellt bei genau 180 ms also im schlechtesten Fall
+    // still aus. 30 ms Reserve deckt das ab.
+    constexpr uint32_t HAPTIC_REST_MS = 30;
 
     // Teleplot kostet Serial-Bandbreite und bremst die Schleife. Fuer echte
     // Nutzungstests DEBUG_TELEPLOT ganz ausschalten.

@@ -9,7 +9,7 @@
 // Es gibt bewusst KEINE feste Sperrfrist mehr. Eine solche muesste ueber der
 // Dauer des Zwei-Impuls-Musters liegen (130 ms), cfg::DEBOUNCE_MS steht aber
 // auf 180 ms - ein Doppelklick wuerde damit nur noch einmal brummen. Gesperrt
-// ist stattdessen genau, solange ein Muster laeuft, plus eine Luecke danach.
+// ist stattdessen genau, solange ein Muster laeuft, plus HAPTIC_REST_MS danach.
 // Das erfuellt denselben Zweck: dicht aufeinander folgende Ausloeser
 // verschmelzen nicht zu einem langen Brummen, sondern bleiben abzaehlbar.
 class Haptic {
@@ -21,8 +21,8 @@ public:
 
     void trigger(uint32_t now_ms, uint8_t pulses = 1) {
         if (pulses == 0) return;
-        if (busy_) return;                                        // laufendes Muster nicht stoeren
-        if (used_ && now_ms - tFree_ < cfg::HAPTIC_GAP_MS) return; // Ruhe danach
+        if (busy_) return;                                         // laufendes Muster nicht stoeren
+        if (used_ && now_ms - tFree_ < cfg::HAPTIC_REST_MS) return; // Ruhe danach
         left_  = pulses;
         busy_  = true;
         used_  = true;

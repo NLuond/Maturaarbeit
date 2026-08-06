@@ -23,13 +23,18 @@
 //   onPower    | -> On  | -> Off         | -> Off         | -> Off
 //   onPose     | ignor. | Zeiger zurueck | ggf. Wechsel   | ggf. Wechsel
 //   onTwistHeld| ignor. | ignor.         | ignor.         | Scroll-Start
-//   onPinch    | ignor. | Linksklick     | ignoriert      | Rechtsklick*
+//   onPinch    | ignor. | Linksklick**   | ignoriert      | Rechtsklick*
 //
 //   * ausser der Scroll-Joystick laeuft UND die Armneigung steht gerade
 //     ausserhalb der Totzone (scrollIdle == false) - dann ist die Hand mit
 //     Scrollen beschaeftigt, und ein Klick mitten im Ausschlag waere fuer den
 //     Nutzer nicht vorhersehbar. Laeuft der Joystick nicht, gibt es nichts,
 //     womit die Neigung kollidieren koennte, und der Rechtsklick zaehlt immer.
+//
+//  ** ausser armOut == true: die FSM-Pose ist um POSE_CALM_MS + MODE_DWELL_MS +
+//     MODE_TAU verzoegert und zeigt nach einer zuegigen Ausdrehung noch Point,
+//     waehrend der Arm koerperlich schon draussen ist. Ein Pinch in diesem
+//     Fenster bleibt wirkungslos statt links zu klicken - siehe onPinch().
 //
 // Der Automat fuehrt selbst nichts aus. Er meldet ueber Actions zurueck, was zu
 // tun ist, und der Aufrufer erledigt es. Damit haengt er an keiner Hardware,
@@ -123,12 +128,28 @@ public:
     // Joystick nicht - die ersten Sekunde der Ausdrehung, oder danach wieder
     // nach dem Zurueckdrehen - ist die Neigung fuer den Klick bedeutungslos
     // und der Rechtsklick zaehlt immer.
-    Actions onPinch(bool scrollIdle) {
+    //
+    // armOut meldet, dass TwistToggle den Arm gerade koerperlich als
+    // ausgedreht sieht (Betrag ueber TURN_ON_DEG), auch wenn pose_ hier noch
+    // Point ist. Die FSM-Pose kommt erst nach POSE_CALM_MS + MODE_DWELL_MS +
+    // MODE_TAU (Glaettung, Bewegungssperre, Haltezeit) an - eine zuegige
+    // 90-Grad-Drehung braucht dafuer 400 bis 700 ms. Ein Pinch in diesem
+    // Fenster waere sonst ein Linksklick an einer Cursorposition, die der
+    // Nutzer nicht sieht (die Hand zeigt ja gerade nicht mehr geradeaus),
+    // waehrend derselbe Pinch ueber cancel() im selben Moment die laufende
+    // Schaltgeste killt.
+    //
+    // Absichtlich unterdrueckt statt auf Rechtsklick umgeleitet: nichts zu tun
+    // ist rueckholbar - der naechste Pinch eine halbe Sekunde spaeter trifft
+    // wieder die richtige Taste -, ein Klick auf die falsche Taste am
+    // unsichtbaren Cursor waere es nicht.
+    Actions onPinch(bool scrollIdle, bool armOut) {
         Actions a;
         if (power_ != Power::On) return a;
 
         switch (pose_) {
             case Pose::Point:
+                if (armOut) break;   // siehe Kommentar oben: lieber nichts als falsch
                 a.click = true; a.hapticPulses = 1;
                 break;
             case Pose::Turned:

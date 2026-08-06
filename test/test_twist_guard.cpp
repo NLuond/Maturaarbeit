@@ -118,6 +118,23 @@ static void test_wrapAroundIsNotARate() {
     CHECK(g.rateDps() < 1000.f, "der Umschlag bei 180 Grad wird als Drehung gelesen");
 }
 
+// reset() wird aufgerufen, waehrend TwistToggle mitten in der Drehung
+// schaltet (Toggle feuert schon bei backDeg=30, der Arm ist noch lange nicht
+// zurueck bei 0). Die Bremse muss dabei zu bleiben - sonst liefe der Cursor
+// fuer die restliche Drehung ungebremst weiter.
+static void test_resetDoesNotReopenBrakeDuringRotation() {
+    TwistGuard g;
+    float deg = 0.f;
+    turnAt(g, deg, 0.f, 0.5f);
+    turnAt(g, deg, 200.f, 0.3f);              // Bremse zu waehrend der Drehung
+    CHECK(g.rateDps() > 100.f, "Testverdrehung ist fuer den Test nicht schnell genug");
+    CHECK(g.gain() < 0.1f, "Bremse ist vor dem reset() noch nicht zu");
+
+    g.reset();
+    const float out = g.update(deg, DT);      // erster Takt nach reset(), Winkel unveraendert
+    CHECK(out < 0.1f, "reset() oeffnet die Bremse mitten in der Drehung");
+}
+
 int main() {
     test_stillMeansFullGain();
     test_firstSampleDoesNotBrake();
@@ -127,6 +144,7 @@ int main() {
     test_releaseIsSlewLimited();
     test_gainStaysBounded();
     test_wrapAroundIsNotARate();
+    test_resetDoesNotReopenBrakeDuringRotation();
 
     std::printf("%d Pruefungen, %d Fehler\n", checks, failures);
     return failures ? 1 : 0;

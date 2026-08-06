@@ -31,7 +31,12 @@ public:
         // stammen aus demselben Abtastzeitpunkt. Bei Einzelzugriffen lagen
         // zwischen dem ersten und dem letzten rund 2 ms, in denen sich die
         // Hand weiterbewegt hat.
-        uint8_t raw[12];
+        // Initialisiert, weil der Rueckgabestatus von readRegisterRegion()
+        // verworfen wird: schlaegt die Bus-Transaktion fehl, blieben sonst
+        // undefinierte Werte stehen statt eines erkennbar falschen Samples
+        // (alles null). Bei 400 kHz ist eine fehlgeschlagene Transaktion
+        // wahrscheinlicher als bei den zuvor genutzten 100 kHz.
+        uint8_t raw[12] = {0};
         imu_.readRegisterRegion(raw, LSM6DS3_ACC_GYRO_OUTX_L_G, 12);
 
         const int16_t gxi = (int16_t)((uint16_t)raw[1]  << 8 | raw[0]);

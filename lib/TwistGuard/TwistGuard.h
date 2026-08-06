@@ -74,7 +74,16 @@ public:
         return gain_;
     }
 
-    void reset() { init_ = false; rate_ = 0.f; gain_ = 1.f; }
+    // Nur den Referenzwinkel verwerfen (init_ = false erzwingt eine neue
+    // Vorwert-Aufnahme im naechsten update()), rate_ und gain_ bleiben
+    // stehen. Der Aufrufer ruft reset() genau dann, wenn die Ein/Aus-Geste
+    // feuert - also mitten in der Drehung, die den Schalter ausgeloest hat.
+    // rate_ und gain_ sind zu diesem Zeitpunkt eine gueltige, laufende
+    // Schaetzung dieser Drehung; sie auf 0/1 zu nullen wuerde die Bremse
+    // fuer den naechsten Takt oeffnen, obwohl der Arm noch dreht - und im
+    // selben apply() setzt pointer_.reset() den 1-Euro-Filter auf
+    // Durchgriff, der Cursor liefe also ungebremst UND ungefiltert.
+    void reset() { init_ = false; }
 
     float gain()    const { return gain_; }
     float rateDps() const { return rate_; }

@@ -58,7 +58,7 @@ static void test_startsOff() {
 
 static void test_offIgnoresEverything() {
     AirMouseState s;
-    const Actions a1 = s.onPinch(true);
+    const Actions a1 = s.onPinch(true, false);
     const Actions a2 = s.onPose(Pose::Turned);
     const Actions a3 = s.onPose(Pose::Idle);
 
@@ -73,21 +73,21 @@ static void test_offIgnoresEverything() {
     CHECK(s.pose() == Pose::Point, "Haltung wandert im Ruhezustand mit");
 }
 
-static void test_shakeToggles() {
+static void test_twistTogglePowersOn() {
     AirMouseState s;
     const Actions on = s.onPower();
-    CHECK(s.on(), "Schuetteln schaltet nicht ein");
+    CHECK(s.on(), "Drehgeste schaltet nicht ein");
     CHECK(on.resetPose, "Haltungserkennung wird beim Einschalten nicht zurueckgesetzt");
     CHECK(on.resetPointer, "Zeiger wird beim Einschalten nicht genullt");
     CHECK(s.pose() == Pose::Point, "startet nicht in der Zeige-Haltung");
 
     const Actions off = s.onPower();
-    CHECK(!s.on(), "zweites Schuetteln schaltet nicht aus");
+    CHECK(!s.on(), "zweite Drehgeste schaltet nicht aus");
     CHECK(off.resetPointer, "Ausschalten nullt den Zeiger nicht");
 }
 
 // Beim Einschalten in verdrehter Hand darf nicht die alte Haltung gelten.
-static void test_shakeResetsPose() {
+static void test_twistToggleResetsPose() {
     AirMouseState s = inPose(Pose::Turned);
     s.onPower();                       // aus
     const Actions on = s.onPower();    // wieder ein
@@ -99,15 +99,28 @@ static void test_shakeResetsPose() {
 // --- Der Pinch, je nach Haltung ---------------------------------------
 
 static void test_pinchWhilePointingClicksLeft() {
-    const Actions a = turnedOn().onPinch(true);
+    const Actions a = turnedOn().onPinch(true, false);
     CHECK(a.click, "Pinch beim Zeigen klickt nicht links");
     CHECK(!a.rightClick, "Pinch beim Zeigen klickt rechts");
     CHECK(a.hapticPulses == 1, "Linksklick meldet nicht genau einen Impuls");
 }
 
+// Kurz nach einer zuegigen Ausdrehung zeigt die FSM-Pose noch Point (siehe
+// Kommentar bei AirMouseState::onPinch: POSE_CALM_MS + MODE_DWELL_MS +
+// MODE_TAU Verzoegerung), obwohl der Arm koerperlich schon draussen ist. Ein
+// Pinch in diesem Fenster darf weder links noch rechts klicken - Rechtsklick
+// waere hier ebenso falsch, weil die FSM noch gar nicht weiss, dass die Hand
+// dreht.
+static void test_pinchSuppressedWhenArmPhysicallyOut() {
+    const Actions a = turnedOn().onPinch(true, true);
+    CHECK(!a.click, "Pinch klickt links, obwohl der Arm ausgedreht ist");
+    CHECK(!a.rightClick, "Pinch klickt rechts, obwohl die FSM-Pose noch Point ist");
+    CHECK(a.hapticPulses == 0, "unterdrueckter Pinch brummt trotzdem");
+}
+
 static void test_pinchWhileTurnedClicksRight() {
     AirMouseState s = inPose(Pose::Turned);
-    const Actions a = s.onPinch(true);
+    const Actions a = s.onPinch(true, false);
     CHECK(a.rightClick, "Pinch bei gedrehter Hand klickt nicht rechts");
     CHECK(!a.click, "Pinch bei gedrehter Hand klickt links");
     CHECK(a.hapticPulses == 2, "Rechtsklick meldet nicht zwei Impulse");
@@ -117,7 +130,7 @@ static void test_pinchWhileTurnedClicksRight() {
 // Nutzer nicht vorhersehbar.
 static void test_pinchWhileActuallyScrollingDoesNothing() {
     AirMouseState s = scrolling();
-    const Actions a = s.onPinch(false);
+    const Actions a = s.onPinch(false, false);
     CHECK(!a.click, "Pinch beim Scrollen klickt links");
     CHECK(!a.rightClick, "Pinch beim Scrollen klickt rechts");
     CHECK(a.hapticPulses == 0, "Pinch beim Scrollen brummt");
@@ -128,7 +141,7 @@ static void test_pinchWhileActuallyScrollingDoesNothing() {
 // unerreichbar.
 static void test_rightClickWorksWhileScrollJoystickIsOn() {
     AirMouseState s = scrolling();
-    const Actions a = s.onPinch(true);
+    const Actions a = s.onPinch(true, false);
     CHECK(a.rightClick, "Rechtsklick faellt weg, sobald der Joystick an ist");
 }
 
@@ -142,19 +155,19 @@ static void test_rightClickWorksWhileScrollJoystickIsOn() {
 // laufenden Joystick darf scrollIdle deshalb gar nicht erst gefragt werden.
 static void test_rightClickIgnoresStaleScrollIdleWhenJoystickIsOff() {
     AirMouseState s = inPose(Pose::Turned);
-    const Actions a1 = s.onPinch(true);
+    const Actions a1 = s.onPinch(true, false);
     CHECK(a1.rightClick, "Rechtsklick faellt aus, obwohl der Joystick noch aus ist");
     CHECK(a1.hapticPulses == 2, "Rechtsklick meldet nicht zwei Impulse");
 
     AirMouseState s2 = inPose(Pose::Turned);
-    const Actions a2 = s2.onPinch(false);
+    const Actions a2 = s2.onPinch(false, false);
     CHECK(a2.rightClick, "eine veraltete scrollIdle==false unterdrueckt den Rechtsklick");
     CHECK(a2.hapticPulses == 2, "Rechtsklick meldet nicht zwei Impulse");
 }
 
 static void test_pinchInIdleDoesNothing() {
     AirMouseState s = inPose(Pose::Idle);
-    const Actions a = s.onPinch(true);
+    const Actions a = s.onPinch(true, false);
     CHECK(!a.click && !a.rightClick, "Pinch bei nicht waagrechtem Arm klickt");
     CHECK(a.hapticPulses == 0, "Pinch in Idle brummt");
 }
@@ -165,7 +178,7 @@ static void test_exactlyOneButtonPerPose() {
     int left = 0, right = 0, none = 0;
     for (Pose p : {Pose::Point, Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(p);
-        const Actions a = s.onPinch(true);
+        const Actions a = s.onPinch(true, false);
         CHECK(actionsConsistent(a), "Pinch meldet beide Tasten zugleich");
         if (a.click)           left++;
         else if (a.rightClick) right++;
@@ -181,9 +194,9 @@ static void test_exactlyOneButtonPerPose() {
 static void test_pinchIsStateless() {
     for (Pose p : {Pose::Point, Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(p);
-        const Actions first = s.onPinch(true);
+        const Actions first = s.onPinch(true, false);
         for (int i = 0; i < 20; i++) {
-            const Actions again = s.onPinch(true);
+            const Actions again = s.onPinch(true, false);
             CHECK(again.click      == first.click,      "Linksklick haengt an der Vorgeschichte");
             CHECK(again.rightClick == first.rightClick, "Rechtsklick haengt an der Vorgeschichte");
             CHECK(s.pose() == p, "Pinch veraendert die Haltung");
@@ -274,20 +287,25 @@ static void test_allStatesAllEvents() {
     int visited = 0;
     for (Power pw : powers) {
         for (Pose po : poses) {
-            for (int ev = 0; ev < 7; ev++) {
+            for (int ev = 0; ev < 9; ev++) {
                 AirMouseState s;
                 if (pw == Power::On) { s.onPower(); s.onPose(po); }
                 else if (po != Pose::Point) continue;   // aus gibt es nur Point
 
                 Actions a;
+                bool armOut = false;   // nur bei Fall 3/4 gesetzt, siehe unten
                 switch (ev) {
-                    case 0: a = s.onPower();            break;
-                    case 1: a = s.onPinch(true);        break;
-                    case 2: a = s.onPinch(false);       break;
-                    case 3: a = s.onPose(Pose::Point);  break;
-                    case 4: a = s.onPose(Pose::Idle);   break;
-                    case 5: a = s.onPose(Pose::Turned); break;
-                    case 6: a = s.onTwistHeld();        break;
+                    case 0: a = s.onPower();                   break;
+                    case 1: a = s.onPinch(true, false);        break;
+                    case 2: a = s.onPinch(false, false);       break;
+                    // armOut == true: Arm koerperlich ausgedreht, waehrend die
+                    // FSM-Pose (hier: po) noch nicht nachgezogen hat.
+                    case 3: armOut = true; a = s.onPinch(true, true);  break;
+                    case 4: armOut = true; a = s.onPinch(false, true); break;
+                    case 5: a = s.onPose(Pose::Point);         break;
+                    case 6: a = s.onPose(Pose::Idle);          break;
+                    case 7: a = s.onPose(Pose::Turned);        break;
+                    case 8: a = s.onTwistHeld();               break;
                 }
                 visited++;
 
@@ -296,11 +314,17 @@ static void test_allStatesAllEvents() {
                     CHECK(!a.click && !a.rightClick, "geklickt, obwohl ausgeschaltet");
                     CHECK(!a.enterScroll, "gescrollt, obwohl ausgeschaltet");
                 }
+                // armOut unterdrueckt nur den Linksklick in Point - er darf
+                // den Rechtsklick in Turned nicht mitreissen, sonst waere ein
+                // ausgedrehter Arm in der abgedrehten Haltung nie klickbar.
+                if (armOut && po == Pose::Point) {
+                    CHECK(!a.click, "Pinch klickt links, obwohl der Arm ausgedreht ist");
+                }
             }
         }
     }
-    // Aus: nur Point -> 1 Gruppe. Ein: 3 Haltungen. Zusammen 4 mal 7 Ereignisse.
-    CHECK(visited == 28, "nicht alle Kombinationen durchlaufen");
+    // Aus: nur Point -> 1 Gruppe. Ein: 3 Haltungen. Zusammen 4 mal 9 Ereignisse.
+    CHECK(visited == 36, "nicht alle Kombinationen durchlaufen");
 }
 
 // Zufaellige, lange Ereignisfolge - findet Reihenfolgen, an die man beim
@@ -311,14 +335,17 @@ static void test_randomWalkKeepsInvariants() {
     for (int i = 0; i < 20000; i++) {
         rng = rng * 1664525u + 1013904223u;
         Actions a;
-        switch ((rng >> 16) % 7) {
-            case 0: a = s.onPower();            break;
-            case 1: a = s.onPinch(true);        break;
-            case 2: a = s.onPinch(false);       break;
-            case 3: a = s.onPose(Pose::Point);  break;
-            case 4: a = s.onPose(Pose::Idle);   break;
-            case 5: a = s.onPose(Pose::Turned); break;
-            case 6: a = s.onTwistHeld();        break;
+        bool armOut = false;
+        switch ((rng >> 16) % 9) {
+            case 0: a = s.onPower();                   break;
+            case 1: a = s.onPinch(true, false);        break;
+            case 2: a = s.onPinch(false, false);       break;
+            case 3: armOut = true; a = s.onPinch(true, true);  break;
+            case 4: armOut = true; a = s.onPinch(false, true); break;
+            case 5: a = s.onPose(Pose::Point);         break;
+            case 6: a = s.onPose(Pose::Idle);          break;
+            case 7: a = s.onPose(Pose::Turned);        break;
+            case 8: a = s.onTwistHeld();               break;
         }
         if (!actionsConsistent(a)) { CHECK(false, "widerspruechliche Aktionen im Zufallslauf"); return; }
 
@@ -328,6 +355,7 @@ static void test_randomWalkKeepsInvariants() {
         }
         // Und jede Taste die Haltung, die zu ihr gehoert.
         if (a.click      && !s.pointing()) { CHECK(false, "Linksklick ausserhalb der Zeige-Haltung"); return; }
+        if (armOut && a.click) { CHECK(false, "Linksklick trotz ausgedrehtem Arm"); return; }
         if (a.rightClick && s.pose() != Pose::Turned) {
             CHECK(false, "Rechtsklick ausserhalb der abgedrehten Haltung"); return;
         }
@@ -342,9 +370,10 @@ static void test_randomWalkKeepsInvariants() {
 int main() {
     test_startsOff();
     test_offIgnoresEverything();
-    test_shakeToggles();
-    test_shakeResetsPose();
+    test_twistTogglePowersOn();
+    test_twistToggleResetsPose();
     test_pinchWhilePointingClicksLeft();
+    test_pinchSuppressedWhenArmPhysicallyOut();
     test_pinchWhileTurnedClicksRight();
     test_pinchWhileActuallyScrollingDoesNothing();
     test_rightClickWorksWhileScrollJoystickIsOn();
