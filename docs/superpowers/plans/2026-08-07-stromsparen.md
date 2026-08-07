@@ -329,12 +329,16 @@ static void test_settledComesOnce() {
 
 // Nach dem Aufwachen laeuft der Zeitgeber neu an - sonst schliefe das Geraet
 // unmittelbar nach dem Wecken wieder ein.
+//
+// Geprueft wird "kein GoToSleep" und nicht "None": in den ersten 300 ms nach
+// dem Aufwachen kommt zwangslaeufig das Settled-Ereignis, und run() liefert
+// das zuletzt gesehene zurueck.
 static void test_timerRestartsAfterWake() {
     SleepPolicy p;
     uint32_t now = 1000;
     run(p, false, 0.f, now, 65000);
     p.wake(now);
-    CHECK(run(p, false, 0.f, now, 30000) == SleepEvent::None,
+    CHECK(run(p, false, 0.f, now, 30000) != SleepEvent::GoToSleep,
           "schlaeft direkt nach dem Aufwachen wieder ein");
 }
 
