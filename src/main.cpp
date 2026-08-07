@@ -167,11 +167,20 @@ void loop() {
         attachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1), onMotion, RISING);
         suspendLoop();                 // hier bleibt die Task stehen
         detachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1));
-        app.onWake(millis());
+        // Nicht millis(): der ganze Controller rechnet mit der aus micros()
+        // abgeleiteten Millisekunde (now_ms = now_us / 1000), und die laeuft
+        // alle 71.58 Minuten auf 0 zurueck, waehrend millis() bis 49.7 Tage
+        // durchzaehlt. Mischt man beide Uhren, sieht SleepPolicy nach dem
+        // ersten Ueberlauf eine riesige Zeitdifferenz statt einer kleinen.
+        app.onWake(micros() / 1000);
         // Nach dem Schlaf liegt nextSample_us beliebig weit in der
         // Vergangenheit. Ohne Neuausrichtung liefe die Schleife erst
         // tausende Overrun-Korrekturen ab, bevor sie wieder im Takt ist.
-        nextSample_us = micros() + cfg::SAMPLE_INTERVAL_US;
+        // tickUs statt SAMPLE_INTERVAL_US: nach dem Aufwachen ist der
+        // Automat in BEREIT, der naechste Takt laeuft also mit READY_DT -
+        // mit der falschen Konstante haette die IMU (gerade auf 52 Hz
+        // gestellt) beim ersten Tick noch kein neues Sample.
+        nextSample_us = micros() + tickUs;
     }
 #endif
 }
