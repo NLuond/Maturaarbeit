@@ -26,15 +26,6 @@ static uint32_t lastOvrDbg = 0;
 #endif
 
 void setup() {
-    // Der nRF52840 startet mit dem LDO; der DC/DC-Wandler spart bei Last bis
-    // zu etwa 30 Prozent. Bei aktiver SoftDevice darf das Register nicht
-    // direkt beschrieben werden - dort ist sd_power_dcdc_mode_set der
-    // richtige Weg. Der Rueckfall auf den Registerzugriff greift, solange
-    // die SoftDevice nicht laeuft (USB-Zweig).
-    if (sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE) != NRF_SUCCESS) {
-        NRF_POWER->DCDCEN = 1;
-    }
-
     // Das Mikrofon wird nie benutzt. Seine Versorgung liegt auf einem
     // eigenen Pin und bleibt aktiv abgeschaltet.
     pinMode(PIN_PDM_PWR, OUTPUT);
@@ -47,6 +38,26 @@ void setup() {
 #if !COLLECT_MODE
     mouse.begin();
     app.begin();
+
+    // Erst hier, nicht am Anfang von setup(): die SoftDevice wird von
+    // Bluefruit.begin() hochgefahren, und das geschieht in mouse.begin().
+    // Vorher waere der SVC-Aufruf wirkungslos, und der direkte
+    // Registerzugriff wuerde von der spaeter startenden SoftDevice
+    // ueberschrieben.
+    //
+    // Nach Uebertragungsweg getrennt statt mit Rueckfall: ein SVC ohne
+    // laufende SoftDevice ist nicht nur wirkungslos, sondern faellt im
+    // schlimmsten Fall in den voreingestellten SVC_Handler des Kerns - und
+    // der ist eine Endlosschleife.
+    //
+    // Deshalb auch innerhalb dieses !COLLECT_MODE-Zweigs: im COLLECT_MODE
+    // laeuft mouse.begin() nie, also auch keine SoftDevice - der SVC-Pfad
+    // waere dort derselbe Blockierfehler, unabhaengig von USE_BLE_HID.
+#if USE_BLE_HID
+    sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);
+#else
+    NRF_POWER->DCDCEN = 1;
+#endif
 #endif
 #if COLLECT_MODE
     // Aufnahme-Warnleuchte. LED_BUILTIN des XIAO nRF52840 ist aktiv LOW:
