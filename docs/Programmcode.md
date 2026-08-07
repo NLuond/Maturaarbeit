@@ -1,6 +1,6 @@
 # Der Programmcode der Air Mouse
 
-Beschreibung des Aufbaus und der Funktionsweise der Firmware. Stand: Commit `84a0811`.
+Beschreibung des Aufbaus und der Funktionsweise der Firmware. Stand: Commit `a3a848c`.
 
 Dieses Dokument erklärt, *wie* der Code aufgebaut ist und *warum* er so aufgebaut ist. Die
 Begründungen stehen bewusst dabei — bei mehreren Entscheidungen war die naheliegende
@@ -79,7 +79,7 @@ zeitlich gestauchtes oder gedehntes Fenster und wird still schlechter, ohne dass
 Fehler auftritt.
 
 Der Zähler `overruns` zählt verpasste Takte. Er ist im Teleplot als Kanal `ovr` sichtbar
-und im Aufnahmemodus zusätzlich an die eingebaute LED gekoppelt (Abschnitt 10).
+und im Aufnahmemodus zusätzlich an die eingebaute LED gekoppelt (Abschnitt 11).
 
 ---
 
@@ -89,9 +89,9 @@ Der Code ist in vier Rollen aufgeteilt, und die Trennung wird strikt eingehalten
 
 | Schicht | Rolle | Module |
 |---|---|---|
-| **Treiber** | Hardware ansprechen | `ImuReader`, `MouseHID`, `Haptic`, `PinchClassifier` |
+| **Treiber** | Hardware ansprechen | `ImuReader`, `MouseHID`, `Haptic`, `PinchClassifier`, `Battery` |
 | **Ableitung** | Messwerte in Grössen umrechnen | `MadgwickAHRS`, `ArmOrientation`, `Filters/` |
-| **Erkenner** | aus Grössen Ereignisse machen | `PoseDetector`, `TwistToggle`, `TwistGuard`, `PinchDetector` |
+| **Erkenner** | aus Grössen Ereignisse machen | `PoseDetector`, `TwistToggle`, `TwistGuard`, `PinchDetector`, `SleepPolicy` |
 | **Zustand** | entscheiden, was ein Ereignis bedeutet | `AirMouseState` |
 | **Ausführung** | Entscheidungen umsetzen | `AirMouseController`, `OrientationPointer`, `ScrollJoystick` |
 
@@ -102,14 +102,14 @@ ist*; ausgeführt wird es an genau einer Stelle, in `AirMouseController::apply()
 Der Nutzen zeigt sich beim Suchen von Fehlern. Verhält sich das Gerät falsch, gibt es nur
 zwei Möglichkeiten: entweder liefert ein Erkenner das falsche Ereignis, oder der Automat
 zieht daraus den falschen Schluss. Der zweite Fall lässt sich auf dem PC in Sekunden
-prüfen (Abschnitt 9), der erste am Gerät messen. Vorher lagen Zustandsbits wie
+prüfen (Abschnitt 10), der erste am Gerät messen. Vorher lagen Zustandsbits wie
 `airmouseOn_` und `lastMode_` im Controller verstreut und mussten von Hand synchron
 gehalten werden — jede Änderung konnte sie auseinanderlaufen lassen.
 
 Die zweite Regel: **Erkenner und Zustand kennen keine Hardware.** In
 `AirMouseState`, `ArmOrientation`, `TwistToggle`, `TwistGuard`, `PinchDetector`,
-`PoseDetector`, `ScrollJoystick`, `OrientationPointer` und `Filters/` steht kein
-`#include <Arduino.h>`, kein Bluetooth und nichts aus dem Edge-Impulse-SDK. Genau das
+`PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `SleepPolicy` und `Filters/` steht
+kein `#include <Arduino.h>`, kein Bluetooth und nichts aus dem Edge-Impulse-SDK. Genau das
 macht sie auf dem PC testbar.
 
 ---
@@ -642,8 +642,9 @@ in die Module.
 
 **Eine bewusste Ausnahme:** Module, die auf dem PC testbar sein müssen, dürfen `config.h`
 nicht einbinden — die Datei zieht `<Arduino.h>` nach. Ihre Werte stehen deshalb in eigenen
-Tuning-Structs: `TwistTuning`, `TwistGuardTuning`, `PointerTuning`. Das birgt die Gefahr,
-dass zwei Orte dieselbe physikalische Grösse beschreiben und auseinanderdriften. Für die
+Tuning-Structs: `TwistTuning`, `TwistGuardTuning`, `PointerTuning`, `SleepTuning`. Das
+birgt die Gefahr, dass zwei Orte dieselbe physikalische Grösse beschreiben und
+auseinanderdriften. Für die
 Verdrehungsschwelle, die sowohl `TwistToggle` als auch `PoseDetector` benutzen, fängt ein
 `static_assert` in `AirMouseController.h` das ab:
 
@@ -659,9 +660,153 @@ abgedrehten Haltung links klickt.
 
 ---
 
-## 9. Testbarkeit
+## 9. Betriebszustände und Stromsparen
 
-Sechs Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in Sekunden:
+Bis hierhin war die Firmware immer "an", solange sie lief: Ein/Aus war eine Eigenschaft
+der Bedienung (`AirMouseState`), keine der Hardware. Legte man die Maus über die Drehgeste
+ab, tastete die IMU trotzdem mit 208 Hz weiter, Madgwick rechnete weiter, und BLE blieb
+verbunden — nur die Wirkung fiel weg. Ein abgelegtes Gerät verbrauchte damit fast so viel
+wie eines in Gebrauch. Dieser Abschnitt beschreibt, was dagegen eingebaut wurde, und warum
+in dieser Reihenfolge.
+
+### 9.1 Der grösste Hebel: die Schleife schläft zwischen den Takten
+
+Vor dieser Änderung kehrte `loop()` einfach zurück, wenn der nächste Takt noch nicht fällig
+war. Der Arduino-Kern ruft `loop()` dann sofort wieder auf — der Cortex-M4F lief also
+durchgehend mit 64 MHz und tat in rund 97 % der Zeit nichts. Das war der grösste einzelne
+Verbraucher im ganzen Gerät, unabhängig vom Betriebszustand.
+
+```cpp
+int32_t restUs = (int32_t)(nextSample_us - micros());
+if (restUs > cfg::SLEEP_MIN_REST_US) {
+    delay((restUs - 1000) / 1000);
+    restUs = (int32_t)(nextSample_us - micros());
+}
+while ((int32_t)(nextSample_us - micros()) > 0) { }   // letzte Millisekunde exakt
+```
+
+`delay()` ruft intern `vTaskDelay`, und mit `configUSE_TICKLESS_IDLE` schläft der
+FreeRTOS-Kern für diese Zeit tatsächlich, statt nur den Aufrufer zu blockieren. Die letzte
+Millisekunde wird bewusst *nicht* verschlafen: die FreeRTOS-Auflösung beträgt 1 ms, der
+Takt von 4785 µs muss aber auf wenige Mikrosekunden genau bleiben — sonst driftet das
+ML-Fenster genau wie bei einem verpassten Takt. Diese eine Änderung wirkt in **jedem**
+Zustand, in dem das Gerät tatsächlich läuft (AKTIV wie BEREIT), und kostet nichts am
+Verhalten — der Overrun-Zähler `ovr` bleibt die Kontrolle, ob der Takt trotzdem hält.
+
+**Die Compiler-Flags dagegen sind der kleinste Posten.** `-O2` (statt `-O1`), `-DNDEBUG`
+und `-ffunction-sections`/`-fdata-sections`/`-Wl,--gc-sections` in `platformio.ini` stehen
+zwar unter denselben Stromspar-Änderungen, wirken aber anders: `-O2` verkürzt die Wachzeit
+pro Takt etwas, weil schnellerer Code schneller wieder schlafen geht, aber der Effekt ist
+klein gegen eine Schleife, die vorher gar nicht schlief. `--gc-sections` wirft ungenutzten
+Code aus dem Binary — das spart Flash, nicht Strom im Betrieb, und wird deshalb auch nicht
+als Stromsparmassnahme geführt. `-Ofast` oder `-flto` wären hier falsch: Ersteres bricht
+mit `-ffast-math` die IEEE-Semantik, auf die sich die Quaternion-Normierung im
+Madgwick-Filter verlässt, Letzteres wäre bei einem grossen, generierten SDK ein Fehlerort,
+der sich kaum zuordnen liesse.
+
+### 9.2 Drei Zustände: AKTIV, BEREIT, SCHLAF
+
+Zusätzlich zur Ein/Aus-Achse in `AirMouseState` gibt es drei Hardware-Zustände. Sie liegen
+darüber, nicht darin — der Automat weiss nichts von IMU-Rate oder Funk, das verwaltet
+`SleepPolicy` zusammen mit dem Controller:
+
+| Zustand | Bedingung | IMU | Funk | Schleifentakt |
+|---|---|---|---|---|
+| **AKTIV** | Maus eingeschaltet | 208 Hz, Madgwick, ML | verbunden | `cfg::SAMPLE_INTERVAL_US` (209 Hz) |
+| **BEREIT** | ausgeschaltet, aber bewegt | 52 Hz, Madgwick, Drehgeste | verbunden | `cfg::READY_INTERVAL_US` (52 Hz) |
+| **SCHLAF** | 60 s ohne Bewegung | nur Beschleunigungssensor, Wake-on-Motion | aus | `loop()` suspendiert |
+
+`SleepPolicy` ist nach demselben Muster gebaut wie die übrigen Erkenner: hardwarefrei,
+ohne `config.h` und `<Arduino.h>`, ihre Parameter stehen in `SleepTuning` und sie liefert
+nur ein Ereignis (`SleepEvent::GoToSleep`/`Settled`) zurück, statt selbst etwas
+abzuschalten:
+
+```cpp
+SleepEvent tick(bool mouseOn, float gyroSum, uint32_t now_ms) {
+    if (mouseOn || gyroSum >= t_.stillDps) tQuiet_ = now_ms;
+    ...
+    if (!wants_ && !settling_ && (now_ms - tQuiet_) >= t_.sleepAfter) { ... }
+}
+```
+
+**Bewegung heisst hier `gyroSum` über einer Schwelle, nicht Beschleunigung.** Eine ruhig
+gehaltene, aber getragene Hand liefert konstant 1 g Erdbeschleunigung und sähe für einen
+Beschleunigungs-Schwellwert aus wie Stillstand — genau das soll aber nicht als Ruhe zählen.
+Aus demselben Grund schläft das Gerät **nur aus BEREIT ein, nie aus AKTIV**: `tick()`
+setzt den Ruhe-Zeitpunkt `tQuiet_` bereits zurück, solange `mouseOn` wahr ist, unabhängig
+von `gyroSum`. Sonst könnte die Maus mitten im Gebrauch verschwinden, während man den
+Cursor nur ruhig auf einem Ziel hält — dort ist `gyroSum` nämlich klein.
+
+**Das Aufwecken übernimmt die IMU selbst**, ohne dass der Mikrocontroller pollen muss. Vor
+dem Schlaf konfiguriert `ImuReader::enableWakeOnMotion()` den LSM6DS3 so, dass eine
+Beschleunigungsänderung über `WAKE_UP_THS` (6 Bit, ein Schritt entspricht bei ±4 g rund
+62 mg; Startwert 2 ≈ 125 mg) den Pin `PIN_LSM6DS3TR_C_INT1` auf High zieht. `main.cpp`
+hängt daran nur eine minimale ISR:
+
+```cpp
+static void onMotion() { resumeLoop(); }
+```
+
+Sie tut absichtlich nur eines. I²C-Zugriffe und BLE haben in einer Interrupt-Routine
+nichts verloren — alles Weitere (IMU neu konfigurieren, Funk wieder anschalten,
+Takt neu ausrichten) geschieht in `AirMouseController::onWake()`, sobald die Task nach
+`suspendLoop()` wieder läuft.
+
+### 9.3 Einschwingen nach dem Aufwachen
+
+Zwei Dinge sind beim Aufwachen kurzzeitig falsch, und beide hängen an derselben Ursache:
+Während des Schlafs bekommt nichts neue Samples.
+
+**Die Lageschätzung ist veraltet.** Madgwick lief zuletzt vor bis zu 60 Sekunden; die
+Ein/Aus-Drehgeste hängt aber genau an diesem Winkel und könnte danebengreifen oder von
+allein auslösen. `onWake()` setzt deshalb kurzzeitig ein stark erhöhtes Beta
+(`MADGWICK_BETA_FAST = 0.5` statt `0.033`), bis die Lage nach `settleMs` (300 ms) wieder
+auf die Schwerkraft eingerastet ist (`SleepEvent::Settled` stellt das normale Beta
+zurück). Für dieses Fenster bleibt `TwistToggle` gesperrt — nicht über einen neuen
+Mechanismus, sondern über denselben Weg, mit dem auch eine nicht-waagrechte Haltung die
+Geste verwirft: `tick()` bekommt `level = false` übergeben, solange `sleep_.settling()`
+wahr ist.
+
+**Der Schleifentakt liegt beliebig weit in der Vergangenheit.** `nextSample_us` wurde vor
+dem Schlaf zuletzt gesetzt; ohne Korrektur müsste die Schleife nach dem Aufwachen erst
+tausende Overrun-Korrekturen abarbeiten, bevor sie wieder im Takt ist. `main.cpp` setzt
+`nextSample_us` deshalb direkt auf `micros() + tickUs` — mit der *aktuellen* Taktlänge,
+nicht mit `cfg::SAMPLE_INTERVAL_US`: der Automat ist nach dem Aufwachen in BEREIT, der IMU
+läuft also schon auf 52 Hz, und mit der falschen Konstante läge der nächste erwartete
+Zeitpunkt vor dem nächsten tatsächlichen Sample.
+
+Eine Nebenbedingung dabei: Die Millisekunde, mit der `SleepPolicy` und der Rest des
+Controllers rechnen, kommt aus `micros() / 1000` und nicht aus `millis()`. Beide Uhren
+laufen unterschiedlich lange, bevor sie überlaufen — die aus `micros()` abgeleitete alle
+71,58 Minuten, `millis()` erst nach 49,7 Tagen. Würde man beide mischen, sähe
+`SleepPolicy` nach dem ersten Überlauf eine riesige statt einer kleinen Zeitdifferenz.
+
+### 9.4 Warum kein System OFF
+
+Der nRF52840 kennt einen noch tieferen Ruhezustand, System OFF, der praktisch keinen Strom
+zieht. Er wurde bewusst nicht verwendet: System OFF verwirft das RAM, ein Aufwachen daraus
+ist ein Neustart. Das kostet zwei Dinge, die über Minuten aufgebaut wurden — den gelernten
+Gyro-Nullpunkt (`ImuReader`s Bias-Schätzer müsste wieder von vorn einschwingen) und die
+bestehende BLE-Verbindung (die Gegenstelle müsste neu koppeln). Der Gewinn ist dabei nach
+der Schätzung im Entwurf klein: System OFF zieht rund 0.4 µA gegenüber rund 30 µA im
+gewählten Schlafzustand — knapp 30 µA Unterschied, ungemessen wie alle Stromwerte an
+dieser Stelle (Abschnitt 13). Bei einem Gerät, das ohnehin wöchentlich geladen wird,
+rechtfertigt das diesen Preis nicht.
+
+**Ohne Messung ist jede Ersparnis eine Behauptung.** `lib/Battery/` liest die Akkuspannung
+über den eingebauten Spannungsteiler der XIAO (`VBAT_ENABLE` schaltet ihn nur für die
+Messung zu, sonst zöge er dauerhaft Strom) und macht sie als Teleplot-Kanal `vbat`
+sichtbar. Damit lässt sich die Entladekurve — vor und nach diesem Umbau, unter gleichem
+Nutzungsmuster — direkt am Gerät aufnehmen, ohne Zusatzmessgerät. Der Umrechnungsfaktor
+(`BATTERY_VOLTS_PER_LSB`) ist ein Startwert aus dem typischen Teilerverhältnis der Platine
+und gehört gegen eine Multimetermessung kalibriert, bevor die Kurve etwas beweist —
+Einzelheiten dazu im Messplan in `TODO.md`.
+
+---
+
+## 10. Testbarkeit
+
+Sieben Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in Sekunden:
 
 | Test | prüft | Include-Pfad |
 |---|---|---|
@@ -671,6 +816,7 @@ Sechs Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in Se
 | `test_twist_guard.cpp` | Verdrehungsbremse | `-I lib/TwistGuard` |
 | `test_one_euro.cpp` | 1-Euro-Filter | `-I lib/Filters` |
 | `test_pinch_features.cpp` | Kanalbelegung des Modells | `-I lib/ImuReader -I lib/PinchFeatures` |
+| `test_sleep_policy.cpp` | Schlaf-Entscheidung | `-I lib/SleepPolicy` |
 
 ```powershell
 g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine.cpp
@@ -680,7 +826,7 @@ g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/te
 Das ist der schnellste Weg, eine Änderung zu prüfen — **vor** dem Firmware-Build, nicht
 danach. Der Firmware-Build dauert wegen des Edge-Impulse-SDK mehrere Minuten.
 
-Alle sechs hängen daran, dass der jeweilige Header **hardwarefrei** bleibt. Das ist keine
+Alle sieben hängen daran, dass der jeweilige Header **hardwarefrei** bleibt. Das ist keine
 Nebenbedingung, sondern der Grund für den Zuschnitt der Module. Fällt ein `#include
 <Arduino.h>` hinein, ist der Test weg.
 
@@ -690,13 +836,13 @@ Gravitationslagen nebeneinander und verlangt ein identisches Modellfenster — e
 also genau die Eigenschaft, um deretwillen die Kanäle gravitationsfrei sind.
 
 Nicht auf dem PC prüfbar sind alle Module, die `<Arduino.h>`, `config.h` oder das
-Edge-Impulse-SDK brauchen: `ImuReader`, `MouseHID`, `Haptic`, `PinchClassifier`,
+Edge-Impulse-SDK brauchen: `ImuReader`, `MouseHID`, `Haptic`, `PinchClassifier`, `Battery`,
 `PoseDetector`, `ScrollJoystick`, `PinchDetector` und der Controller selbst. Diese werden
 über Kompilieren und Messen am Gerät verifiziert.
 
 ---
 
-## 10. Datenaufnahme für das Modell
+## 11. Datenaufnahme für das Modell
 
 Mit `COLLECT_MODE true` gibt `main.cpp` statt HID-Bewegungen nur CSV aus — fünf Werte pro
 Zeile, in der Reihenfolge aus `feat::pack()`, mit `edge-impulse-data-forwarder`
@@ -721,7 +867,7 @@ Das vollständige Aufnahmeprotokoll steht in `TODO.md`.
 
 ---
 
-## 11. Wiederkehrende Entwurfsentscheidungen
+## 12. Wiederkehrende Entwurfsentscheidungen
 
 Fünf Muster ziehen sich durch den Code und erklären die meisten Einzelentscheidungen.
 
@@ -754,7 +900,7 @@ vermerkt. Ohne diese Notiz baut man sie beim nächsten Mal wieder ein.
 
 ---
 
-## 12. Offene Punkte
+## 13. Offene Punkte
 
 Die Einstellwerte im Code sind **begründete Ausgangspunkte, keine Messergebnisse**.
 `TODO.md` führt den Messplan in der Reihenfolge, in der die Schritte aufeinander aufbauen,

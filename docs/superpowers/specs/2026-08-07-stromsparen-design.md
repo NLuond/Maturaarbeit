@@ -242,11 +242,20 @@ Mechanismus im Modul.
 ## 7. Regler, Peripherie, Funk
 
 **DC/DC-Regler.** Der nRF52840 startet mit dem LDO; der DC/DC-Wandler spart bei Last bis
-zu etwa 30 %. **Bei aktiver SoftDevice darf das Register nicht direkt beschrieben
-werden** — `NRF_POWER->DCDCEN = 1` ist dann wirkungslos oder schädlich. Richtig ist
-`sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE)`, mit Rückfall auf den direkten
-Registerzugriff, solange die SoftDevice nicht läuft. Ob der Adafruit-Kern das bereits tut,
-ist zu prüfen; im Framework liess sich kein entsprechender Aufruf finden.
+zu etwa 30 %. Der ursprüngliche Plan — `sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE)` mit
+Rückfall auf den direkten Registerzugriff, solange keine SoftDevice läuft — war so nicht
+haltbar: `Bluefruit.begin()` ist der einzige Aufruf, der die SoftDevice überhaupt startet,
+und er läuft in `setup()` erst über `mouse.begin()`. Ein SVC-Aufruf an früherer Stelle in
+`setup()` liefe also immer ohne resident laufende SoftDevice, und der voreingestellte
+`SVC_Handler` des Kerns ist eine Endlosschleife — ein SVC ohne SoftDevice könnte das Gerät
+im schlimmsten Fall aufhängen statt nur wirkungslos zu bleiben.
+
+Gebaut wurde deshalb: der Block sitzt **nach** `mouse.begin()`, nach Übertragungsweg
+getrennt statt mit Rückfall — `#if USE_BLE_HID` ruft `sd_power_dcdc_mode_set(...)`,
+`#else` schreibt `NRF_POWER->DCDCEN = 1` direkt, weil dort nie eine SoftDevice läuft.
+Beides steckt zusätzlich im bestehenden `#if !COLLECT_MODE`-Zweig, weil `mouse.begin()`
+selbst im `COLLECT_MODE` nicht aufgerufen wird — ohne diese Schachtelung liefe der
+SVC-Pfad dort in denselben Blockierfehler, unabhängig von `USE_BLE_HID`.
 
 **Mikrofon.** `PIN_PDM_PWR` (P19) wird nie benutzt und bleibt aktiv abgeschaltet.
 

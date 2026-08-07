@@ -266,3 +266,57 @@ zugeschrieben wird, das gar nicht die Ursache ist.
    kein Klick während des Scrollens, Joystick erst nach einer Sekunde.
 8. Erst jetzt `USE_ML_PINCH true`, nach der Neuaufnahme: `env`, `gate`, `p_ml`
    beim Pinchen in beiden Haltungen.
+
+## Messplan Stromsparen
+
+Alle Messungen mit `DEBUG_TELEPLOT false`, sonst misst man den Messaufbau.
+Der Kanal `vbat` steht dafür auch ohne Teleplot zur Verfügung, wenn man ihn
+einzeln einschaltet.
+
+1. **`BATTERY_VOLTS_PER_LSB` kalibrieren.** Akkuspannung mit dem Multimeter
+   messen und gegen `vbat` halten, Faktor nachziehen. Alles Weitere hängt an
+   dieser Zahl.
+2. **`ovr` nach dem Schleifen-Umbau.** Muss bei 0 bleiben. Steigt er, schläft
+   die Schleife zu lange und die feste Schrittweite stimmt nicht mehr.
+3. **Stromaufnahme je Zustand**, Multimeter in Serie: AKTIV, BEREIT, SCHLAF.
+   Gegen die Schätzwerte im Design halten (~2–3 mA / ~1 mA / ~0.03–0.05 mA).
+4. **`WAKE_UP_THRESHOLD` einstellen.** Armheben muss wecken, ein Klopfen auf
+   den Tisch nicht. Startwert 2.
+5. **Aufwachen prüfen.** Arm ablegen, 60 s warten, Arm heben: Wacht es auf?
+   Wie lange bis BLE wieder steht? Funktioniert die Drehgeste unmittelbar
+   danach, oder schlägt das Einschwingen durch (`rtwist` beobachten)?
+6. **Falsches Einschlafen ausschliessen.** Maus einschalten, Cursor zwei
+   Minuten ruhig auf einem Ziel halten. Sie darf nicht verschwinden.
+7. **Entladekurve**, je einmal für den Stand vor und nach diesem Plan, unter
+   gleichem Nutzungsmuster. Das ist die belastbare Zahl für die Arbeit —
+   Laufzeit vorher gegen nachher.
+8. **Offene Messpunkte, bewusst nicht entschieden:** BLE-Verbindungsintervall
+   (7.5–15 ms, teuer aber latenzentscheidend) und Sendeleistung
+   (`setTxPower(4)`, Maximum). Beide erst messen, dann entscheiden.
+
+**Nebenbedingungen aus den Code-Reviews — vor der Messreihe lesen, nicht erst
+danach:**
+
+- **Jede Strommessung und jeder Reconnect-Test läuft mit `USE_BLE_HID true`.**
+  Im committeten USB-Build sind `radioOff()`/`radioOn()` leere Hüllen
+  (`MouseHID.h`) — dort zu messen heisst, eine Funktion zu messen, die es gar
+  nicht gibt.
+- **`ovr` schlägt nur bei einem ganzen verpassten Takt aus** (4785 µs).
+  Feinere Verschiebungen durch die gröbere `delay()`-Auflösung bleiben für ihn
+  unsichtbar — „`ovr` bleibt 0" ist für sich allein also kein Beleg dafür,
+  dass die schlafende Schleife den Takt wirklich hält.
+- **Enttäuscht die SCHLAF-Zahl, zuerst den Interrupt verdächtigen, nicht die
+  IMU-Konfiguration.** `attachInterrupt` läuft über den GPIOTE-Event-Modus,
+  der seine Erkennungsschaltung getaktet hält und dadurch messbar mehr
+  Ruhestrom kostet als der stromsparende SENSE/PORT-Mechanismus.
+- **Nach dem Aufwachen braucht das Gyroskop seine Einlaufzeit.** Am Teleplot
+  prüfen, dass in der ersten Sekunde nach dem Wecken kein falsches `Toggle`
+  oder `Held` auftritt.
+- **Der Gyro-Bias-Lerner sieht während dieser Einlaufzeit nahezu null** und
+  verschiebt den Nullpunkt bei jedem Aufwachen ein kleines Stück. Nach vielen
+  Weck-Zyklen einmal nachsehen, ob der Cursor davon merklich driftet.
+- **Bewusster Langzeit-Lauftest:** über 75 Minuten laufen lassen, dann
+  schlafen legen und wecken. Die aus `micros()` abgeleitete Millisekunde
+  läuft alle 71.58 Minuten über, und ein verirrtes Einschlafen in BEREIT je
+  Überlauf ist bewusst in Kauf genommen — prüfen, dass es sich bei der
+  nächsten Bewegung von selbst heilt statt sich zu wiederholen.

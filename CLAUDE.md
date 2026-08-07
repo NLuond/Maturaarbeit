@@ -42,9 +42,12 @@ g++ -std=c++14 -Wall -Wextra -I lib/Filters -o "$env:TEMP\euro.exe" test/test_on
 
 g++ -std=c++14 -Wall -Wextra -I lib/ImuReader -I lib/PinchFeatures -o "$env:TEMP\feat.exe" test/test_pinch_features.cpp
 & "$env:TEMP\feat.exe"
+
+g++ -std=c++14 -Wall -Wextra -I lib/SleepPolicy -o "$env:TEMP\sleep.exe" test/test_sleep_policy.cpp
+& "$env:TEMP\sleep.exe"
 ```
 
-Erwartet fuer alle sechs: `0 Fehler`, Exit 0 — feste Pruefzahlen stehen bewusst nicht mehr
+Erwartet fuer alle sieben: `0 Fehler`, Exit 0 — feste Pruefzahlen stehen bewusst nicht mehr
 hier, sie liefen bei jeder Umschreibung der Tests auseinander.
 
 Das laeuft in Sekunden und ist der schnellste Weg, eine Aenderung an einem dieser Module
@@ -52,12 +55,12 @@ zu pruefen — vor dem Firmware-Build, nicht danach. Es gibt keine `[env:native]
 ein `pio test` wuerde also aufs Board wollen. Alles andere wird weiterhin ueber
 Kompilieren + Messen am Geraet (Teleplot) verifiziert.
 
-Alle sechs Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt:
+Alle sieben Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt:
 `ArmOrientation.h` inkludiert bewusst weder `Arduino.h` noch `config.h`, ebenso
-`TwistToggle.h`, `TwistGuard.h`, `OneEuro.h` und `PinchFeatures.h`. Parameter, die sonst
-aus `cfg::` kaemen, stecken deshalb in eigenen Tuning-Structs (`TwistTuning`,
-`TwistGuardTuning`, `PointerTuning`); das Vorzeichen `cfg::ELEV_SIGN` wird erst im
-Controller angewandt, nicht im `ArmOrientation`-Modul.
+`TwistToggle.h`, `TwistGuard.h`, `OneEuro.h`, `PinchFeatures.h` und `SleepPolicy.h`.
+Parameter, die sonst aus `cfg::` kaemen, stecken deshalb in eigenen Tuning-Structs
+(`TwistTuning`, `TwistGuardTuning`, `PointerTuning`, `SleepTuning`); das Vorzeichen
+`cfg::ELEV_SIGN` wird erst im Controller angewandt, nicht im `ArmOrientation`-Modul.
 
 Beim Aendern von Schaltern in `config.h` **nie** parallel zu einem laufenden Build: zwei
 gleichzeitige `pio run` auf dasselbe `.pio/build` brechen mit
@@ -92,23 +95,43 @@ PointerTuning t;  t.accelK = 0.f;
 OrientationPointer ohneAccel(t);
 ```
 
+## Betriebszustaende
+
+Zusaetzlich zur Ein/Aus-Achse in `AirMouseState` gibt es drei Hardware-Zustaende, die
+`SleepPolicy` und der Controller gemeinsam verwalten. main.cpp richtet danach den
+Schleifentakt aus, der Controller die IMU-Rate:
+
+| Zustand | Bedingung | IMU-Rate | Funk | Schleifentakt |
+|---|---|---|---|---|
+| AKTIV | Maus eingeschaltet (`fsm_.on()`) | 208 Hz | an | `cfg::SAMPLE_INTERVAL_US` (209 Hz) |
+| BEREIT | ausgeschaltet, aber innerhalb `SleepTuning::sleepAfter` (60 s) bewegt | 52 Hz | an | `cfg::READY_INTERVAL_US` (52 Hz) |
+| SCHLAF | 60 s ohne Bewegung (`gyroSum < SleepTuning::stillDps`) | nur Beschleunigungssensor, Wake-on-Motion auf INT1 | aus | `loop()` suspendiert (`suspendLoop()`), IMU weckt per Interrupt |
+
+Eingeschlafen wird nur aus BEREIT, nie aus AKTIV — sonst verschwaende die Maus mitten im
+Gebrauch, waehrend man den Cursor nur ruhig auf einem Ziel haelt. Es gibt bewusst kein
+System OFF: das RAM bleibt erhalten und damit der ueber Minuten gelernte Gyro-Nullpunkt
+und die BLE-Verbindung, ein Reset wuerde beides kosten.
+
 ## Architektur
 
 `src/main.cpp` ist bewusst duenn: fester Takt + IMU lesen, dann entweder CSV ausgeben
 (`COLLECT_MODE`) oder `AirMouseController::update()` aufrufen. Die Schleife arbeitet mit
-**fester Schrittweite** (`cfg::DT`), nicht mit der gemessenen Zeitdifferenz — Filter und
-ML-Fenster brauchen eine konstante Abtastrate; nach einer Stockung wird neu ausgerichtet
-statt nachgeholt.
+**fester Schrittweite**, nicht mit der gemessenen Zeitdifferenz — Filter und ML-Fenster
+brauchen eine konstante Abtastrate; nach einer Stockung wird neu ausgerichtet statt
+nachgeholt. `cfg::DT` ist dabei nicht mehr die einzige Schrittweite: sie gilt nur in
+AKTIV, in BEREIT laeuft die Schleife mit `cfg::READY_DT` (52 Hz statt 209 Hz) — der
+ML-Pfad braucht die volle Rate ohnehin nur, solange die Maus eingeschaltet ist, und laeuft
+ausschliesslich in AKTIV.
 
 Jedes Modul ist eine header-only Klasse in einem eigenen `lib/<Name>/` (kein `.cpp`),
 per `-I` in `platformio.ini` eingebunden. Neues Modul → Ordner anlegen **und** dort einen
 `-I`-Eintrag ergaenzen.
 
 Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `TwistToggle`,
-`TwistGuard`, `PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `Filters/`) kennen
-weder Hardware noch das EI-SDK. Beides ist auf `ImuReader`, `MouseHID`, `Haptic` und `PinchClassifier`
-beschraenkt. Diese Richtung beim Erweitern beibehalten — nichts aus `lib/ei-model` oder
-`bluefruit` gehoert in ein Policy-Modul.
+`TwistGuard`, `PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `SleepPolicy`,
+`Filters/`) kennen weder Hardware noch das EI-SDK. Beides ist auf `ImuReader`, `MouseHID`,
+`Haptic`, `Battery` und `PinchClassifier` beschraenkt. Diese Richtung beim Erweitern
+beibehalten — nichts aus `lib/ei-model` oder `bluefruit` gehoert in ein Policy-Modul.
 
 **`AirMouseState` (`lib/AirMouseState/`) haelt den gesamten Zustand** in zwei Achsen
 (`Power` / `Pose`) und fuehrt selbst nichts aus: jedes Ereignis (`onPower`, `onPose`,
@@ -181,6 +204,11 @@ Ablauf pro Tick:
    erfassen.
 6. `ScrollJoystick` — im Scroll-Modus zaehlt die *gehaltene* Armneigung relativ zum
    Eintrittswinkel (Positionssignal, driftet nicht), nicht die Drehrate.
+7. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
+   `GoToSleep`, bereitet `prepareSleep()` nur Funk und IMU vor (`radioOff()`, IMU auf
+   Sleep-Rate + Wake-on-Motion); das eigentliche Schlafenlegen (`suspendLoop()`) und
+   Aufwecken fuehrt `main.cpp` aus, weil dort der Schleifentakt haengt, der danach neu
+   ausgerichtet werden muss.
 
 Wichtige Eigenheiten, die man sonst kaputt macht:
 
