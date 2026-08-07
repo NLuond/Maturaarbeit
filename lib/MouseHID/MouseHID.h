@@ -40,6 +40,18 @@ public:
     void scroll(int8_t ticks)       { blehid.mouseScroll(ticks); }
     bool move(int8_t dx, int8_t dy) { return blehid.mouseMove(dx, dy); }
 
+    // Im Ruhezustand ist der Funk der groesste verbleibende Verbraucher.
+    // Verbindung trennen und Advertising stoppen; beim Aufwachen wird neu
+    // geworben. Die Neuverbindung versteckt sich hinter der Bewegung des
+    // Nutzers: er hebt den Arm, waehrenddessen verbindet sich BLE, und erst
+    // danach kommt die Drehgeste.
+    void radioOff() {
+        Bluefruit.Advertising.stop();
+        if (Bluefruit.connected()) Bluefruit.disconnect(Bluefruit.connHandle());
+    }
+
+    void radioOn() { Bluefruit.Advertising.start(0); }
+
 private:
     void startAdvertising() {
         Bluefruit.Advertising.addFlags(BLE_GAP_ADV_FLAGS_LE_ONLY_GENERAL_DISC_MODE);
@@ -75,6 +87,12 @@ public:
     void scroll(int8_t ticks)       { hid_.mouseScroll(0, ticks, 0); }
     bool move(int8_t dx, int8_t dy) { return hid_.mouseMove(0, dx, dy); }
 
+    // Ueber USB gibt es keinen Funk und keinen Ruhezustand - das Geraet
+    // haengt an einer Stromquelle, und ein Abschalten wuerde die
+    // Enumeration abwerfen. Leer statt eines #if an der Aufrufstelle.
+    void radioOff() {}
+    void radioOn()  {}
+
 private:
     Adafruit_USBD_HID hid_;
 };
@@ -95,3 +113,7 @@ static_assert(std::is_same<decltype(&MouseHID::scroll),  void (MouseHID::*)(int8
               "MouseHID::scroll() hat die falsche Signatur");
 static_assert(std::is_same<decltype(&MouseHID::move),    bool (MouseHID::*)(int8_t, int8_t)>::value,
               "MouseHID::move() muss bool zurueckgeben - siehe Akkumulation im Controller");
+static_assert(std::is_same<decltype(&MouseHID::radioOff), void (MouseHID::*)()>::value,
+              "MouseHID::radioOff() hat die falsche Signatur");
+static_assert(std::is_same<decltype(&MouseHID::radioOn),  void (MouseHID::*)()>::value,
+              "MouseHID::radioOn() hat die falsche Signatur");
