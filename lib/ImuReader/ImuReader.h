@@ -6,6 +6,8 @@
 #include "ImuSample.h"
 #include "LowPass.h"
 
+enum class ImuRate : uint8_t { Active, Ready, Sleep };
+
 class ImuReader {
 public:
     ImuReader() : imu_(I2C_MODE, 0x6A) {}
@@ -86,7 +88,49 @@ public:
         return s;
     }
 
+    // Nur das ODR-Nibble wird veraendert, der Rest der Register bleibt
+    // stehen: dort sitzen Messbereich und Bandbreite, die begin() gesetzt
+    // hat und die sich nicht mit der Rate aendern sollen.
+    void setRate(ImuRate r) {
+        uint8_t odrXl = 0x50;   // 208 Hz
+        uint8_t odrG  = 0x50;   // 208 Hz
+        if (r == ImuRate::Ready) { odrXl = 0x30; odrG = 0x30; }   // 52 Hz
+        // Im Schlaf laeuft nur der Beschleunigungssensor weiter, und der
+        // nur fuer die Wake-Up-Funktion. Das Gyroskop ist der groessere
+        // Verbraucher der beiden und wird zum Wecken nicht gebraucht.
+        if (r == ImuRate::Sleep)  { odrXl = 0x20; odrG = 0x00; }   // 26 Hz / aus
+
+        setOdr(LSM6DS3_ACC_GYRO_CTRL1_XL, odrXl);
+        setOdr(LSM6DS3_ACC_GYRO_CTRL2_G,  odrG);
+    }
+
+    // Weckt ueber INT1, sobald sich die Beschleunigung um mehr als die
+    // Schwelle aendert. TAP_CFG1 Bit 7 gibt die einfachen Interrupts
+    // ueberhaupt erst frei; ohne dieses Bit bleibt INT1 stumm.
+    void enableWakeOnMotion() {
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_DUR, 0x00);
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_THS, cfg::WAKE_UP_THRESHOLD);
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_MD1_CFG,     0x20);   // INT1_WU
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1,    0x80);   // Interrupts frei
+    }
+
+    void disableWakeOnMotion() {
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_MD1_CFG,  0x00);
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1, 0x00);
+        // Die Quelle einmal lesen, damit ein noch anstehendes Ereignis
+        // geloescht ist und INT1 nicht gleich wieder ausloest.
+        uint8_t dummy = 0;
+        imu_.readRegister(&dummy, LSM6DS3_ACC_GYRO_WAKE_UP_SRC);
+        (void)dummy;
+    }
+
 private:
+    void setOdr(uint8_t reg, uint8_t odrBits) {
+        uint8_t v = 0;
+        imu_.readRegister(&v, reg);
+        imu_.writeRegister(reg, (uint8_t)((v & 0x0F) | odrBits));
+    }
+
     LSM6DS3 imu_;
     float   bx_ = 0.f, by_ = 0.f, bz_ = 0.f;
     LowPass lpGx_{cfg::GRAVITY_LP_HZ}, lpGy_{cfg::GRAVITY_LP_HZ}, lpGz_{cfg::GRAVITY_LP_HZ};

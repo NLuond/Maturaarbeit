@@ -51,6 +51,20 @@ namespace cfg {
     constexpr int GYRO_RANGE_DPS = 500;
     constexpr int GYRO_ODR_HZ    = 208;
 
+    // Abtastraten der drei Betriebszustaende. AKTIV muss 208 Hz sein, weil
+    // die Verarbeitung mit SAMPLE_INTERVAL_US laeuft und das ML-Fenster
+    // daran haengt. BEREIT braucht nur die Drehgeste, die ueber rund eine
+    // Sekunde laeuft - 52 Hz sind dafuer reichlich. Im Schlaf laeuft der
+    // Beschleunigungssensor nur noch fuer die Wake-Up-Funktion.
+    constexpr uint32_t READY_INTERVAL_US = 19230;   // 52 Hz
+    constexpr float    READY_DT          = READY_INTERVAL_US * 1e-6f;
+
+    // Schwelle der Wake-Up-Funktion, 6 Bit. Ein Schritt entspricht einem
+    // Vierundsechzigstel des Messbereichs, bei +-4 g also rund 62 mg.
+    // Startwert 2 = rund 125 mg: Armheben weckt, ein Klopfen auf den Tisch
+    // moeglichst nicht. Am Geraet nachziehen.
+    constexpr uint8_t WAKE_UP_THRESHOLD = 2;
+
     // Der LSM6DS3 kann 400 kHz. Bei sechs Werten je Takt ist das der
     // Unterschied zwischen rund 2 ms und rund 0.5 ms Schleifenzeit - gesetzt
     // wird die Rate erst nach imu_.begin(), weil Wire.begin() sie dort auf die
