@@ -3,6 +3,7 @@
 #include <math.h>
 #include "config.h"
 #include "ImuSample.h"
+#include "ImuReader.h"
 #include "MouseHID.h"
 #include "MadgwickAHRS.h"
 #include "VibrationEnvelope.h"
@@ -18,6 +19,7 @@
 #include "ArmOrientation.h"
 #include "TwistGuard.h"
 #include "Battery.h"
+#include "SleepPolicy.h"
 
 // Bindeglied zwischen Sensorik und Zustandsautomat. Die Aufgabenteilung:
 //
@@ -46,8 +48,8 @@ static_assert(kTwistDefaults.backDeg < cfg::TURN_OFF_DEG &&
 
 class AirMouseController {
 public:
-    explicit AirMouseController(MouseHID& mouse)
-        : mouse_(mouse), ahrs_(cfg::MADGWICK_BETA) {}
+    AirMouseController(MouseHID& mouse, ImuReader& imu)
+        : mouse_(mouse), imu_(imu), ahrs_(cfg::MADGWICK_BETA) {}
 
     void begin() { haptic_.begin(); battery_.begin(); }
 
@@ -97,7 +99,12 @@ public:
         // Einschalt-Geste nicht abbrechen.
         if (fsm_.on() && env > cfg::ENV_ON) twistToggle_.cancel();
 
-        switch (twistToggle_.tick(pose_.relTwistDeg(), pose_.level(), now_ms)) {
+        // Waehrend des Einschwingens ist der Verdrehungswinkel noch nicht
+        // verlaesslich. Ueber level = false verwirft TwistToggle eine
+        // laufende Ausdrehung ohnehin - es braucht dafuer keinen neuen
+        // Mechanismus im Modul.
+        const bool levelOk = pose_.level() && !sleep_.settling();
+        switch (twistToggle_.tick(pose_.relTwistDeg(), levelOk, now_ms)) {
             case TwistEvent::Toggle: apply(fsm_.onPower(),     now_ms); break;
             case TwistEvent::Held:   apply(fsm_.onTwistHeld(), now_ms); break;
             case TwistEvent::None:   break;
@@ -131,10 +138,49 @@ public:
         }
 
         debug(s, env, now_us);
+
+        switch (sleep_.tick(fsm_.on(), s.gyroSum, now_ms)) {
+            case SleepEvent::GoToSleep:
+                // Nur vorbereiten. Das Schlafenlegen selbst gehoert
+                // main.cpp - dort haengt der Takt dran, der danach neu
+                // ausgerichtet werden muss.
+                prepareSleep();
+                break;
+            case SleepEvent::Settled:
+                ahrs_.setBeta(cfg::MADGWICK_BETA);
+                break;
+            case SleepEvent::None:
+                break;
+        }
     }
+
+    bool wantsSleep() const { return sleep_.wantsSleep(); }
+
+    // Reihenfolge ist wichtig: erst der Funk, dann die IMU. Umgekehrt liefe
+    // der Funk noch, waehrend die IMU schon nichts mehr meldet.
+    void prepareSleep() {
+        mouse_.radioOff();
+        imu_.setRate(ImuRate::Sleep);
+        imu_.enableWakeOnMotion();
+    }
+
+    void onWake(uint32_t now_ms) {
+        imu_.disableWakeOnMotion();
+        imu_.setRate(ImuRate::Active);
+        mouse_.radioOn();
+        // Erhoehtes Beta, damit die Lage nach dem Schlaf schnell wieder auf
+        // die Schwerkraft einrastet. SleepEvent::Settled stellt es zurueck.
+        ahrs_.setBeta(cfg::MADGWICK_BETA_FAST);
+        sleep_.wake(now_ms);
+    }
+
+    // AKTIV laeuft mit voller Rate, BEREIT gedrosselt. main.cpp richtet den
+    // Takt danach aus.
+    bool activeRate() const { return fsm_.on(); }
 
 private:
     MouseHID&          mouse_;
+    ImuReader&         imu_;
     MadgwickAHRS       ahrs_;
     VibrationEnvelope  envelope_;
     PinchClassifier    ml_;
@@ -147,6 +193,7 @@ private:
     Haptic             haptic_;
     TwistGuard         twistGuard_;
     Battery            battery_;
+    SleepPolicy        sleep_;
 
     bool     clickPulse_ = false;
     float    twist_ = 0.f, elev_ = 0.f;
@@ -154,6 +201,8 @@ private:
     float    accumX_ = 0.f, accumY_ = 0.f;
     uint32_t lastMove_ = 0, lastDbg_ = 0;
     uint16_t moveFail_ = 0;
+    // Startzustand ist ausgeschaltet, also BEREIT.
+    bool     imuRateActive_ = false;
 
 #if DEBUG_TELEPLOT
     // Nur zur Achsen-Bestimmung: die geglaettete Erdbeschleunigung sagt
@@ -178,6 +227,14 @@ private:
         if (a.enterScroll)   scroll_.enter(elev_);
         if (a.resetPointer) { accumX_ = accumY_ = 0.f; pointer_.reset(); twistGuard_.reset(); }
         if (a.hapticPulses)  haptic_.trigger(now_ms, a.hapticPulses);
+
+        // Die Abtastrate folgt dem Ein/Aus-Zustand. Nur beim Wechsel
+        // schreiben, nicht in jedem Takt - ein I2C-Zugriff je Takt waere
+        // genau das Gegenteil von sparsam.
+        if (fsm_.on() != imuRateActive_) {
+            imuRateActive_ = fsm_.on();
+            imu_.setRate(imuRateActive_ ? ImuRate::Active : ImuRate::Ready);
+        }
     }
 
     // Der Klassifikator laeuft nur im eingeschalteten Zustand. Ihn auch im

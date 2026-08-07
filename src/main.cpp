@@ -9,9 +9,10 @@
 
 ImuReader          imu;
 MouseHID           mouse;
-AirMouseController app(mouse);
+AirMouseController app(mouse, imu);
 
 static uint32_t nextSample_us = 0;
+static uint32_t tickUs = cfg::READY_INTERVAL_US;   // startet ausgeschaltet
 
 #if DEBUG_TELEPLOT || COLLECT_MODE
 // Zaehlt, wie oft die Schleife einen ganzen Abtastschritt verpasst hat. Jeder
@@ -38,6 +39,10 @@ void setup() {
 #if !COLLECT_MODE
     mouse.begin();
     app.begin();
+
+    // Nur hier: der Wake-Up-Interrupt und die Schlaflogik existieren nur in
+    // diesem Zweig, im COLLECT_MODE laeuft app.update() ohnehin nie.
+    pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);
 
     // Erst hier, nicht am Anfang von setup(): die SoftDevice wird von
     // Bluefruit.begin() hochgefahren, und das geschieht in mouse.begin().
@@ -71,6 +76,12 @@ void setup() {
     nextSample_us = micros();
 }
 
+#if !COLLECT_MODE
+// Tut absichtlich nur eines. Alles Weitere geschieht in der Task, sobald sie
+// wieder laeuft - I2C und BLE haben in einer ISR nichts verloren.
+static void onMotion() { resumeLoop(); }
+#endif
+
 void loop() {
     // Warten statt leer durchlaufen. Der Kern ruft loop() in einer engen
     // Schleife auf; ein sofortiges return hiesse 64 MHz Volllast fuer
@@ -87,12 +98,26 @@ void loop() {
 
     const uint32_t now_us = micros();
 
+#if COLLECT_MODE
+    // Die Aufnahme braucht durchgehend die feste ML-Rate. Es gibt hier
+    // keinen BEREIT-Zustand und keinen Aufrufer von app.activeRate() -
+    // app.update() laeuft im COLLECT_MODE nie, siehe unten.
+    tickUs = cfg::SAMPLE_INTERVAL_US;
+    const float tickDt = cfg::DT;
+#else
+    // Die Taktlaenge folgt dem Zustand: AKTIV braucht die 209 Hz des
+    // ML-Modells, BEREIT nur die Drehgeste. Der Klassifikator laeuft
+    // ausschliesslich in AKTIV, wo weiterhin exakt SAMPLE_INTERVAL_US gilt.
+    tickUs = app.activeRate() ? cfg::SAMPLE_INTERVAL_US : cfg::READY_INTERVAL_US;
+    const float tickDt = app.activeRate() ? cfg::DT : cfg::READY_DT;
+#endif
+
     // Feste Schrittweite statt der tatsaechlich verstrichenen Zeit: alle Filter
     // und das ML-Fenster brauchen eine konstante Abtastrate. Nach einer
     // Stockung wird neu ausgerichtet, statt die Rueckstaende nachzuholen.
-    nextSample_us += cfg::SAMPLE_INTERVAL_US;
-    if ((int32_t)(now_us - nextSample_us) > (int32_t)cfg::SAMPLE_INTERVAL_US) {
-        nextSample_us = now_us + cfg::SAMPLE_INTERVAL_US;
+    nextSample_us += tickUs;
+    if ((int32_t)(now_us - nextSample_us) > (int32_t)tickUs) {
+        nextSample_us = now_us + tickUs;
     #if DEBUG_TELEPLOT || COLLECT_MODE
         overruns++;
     #endif
@@ -101,7 +126,7 @@ void loop() {
     #endif
     }
 
-    const ImuSample s = imu.read(cfg::DT);
+    const ImuSample s = imu.read(tickDt);
 
 #if COLLECT_MODE
     // Muss dieselbe Rate und dieselben Kanaele liefern wie der Inferenz-Pfad
@@ -127,7 +152,7 @@ void loop() {
     }
     Serial.println();
 #else
-    app.update(s, cfg::DT, now_us);
+    app.update(s, tickDt, now_us);
 
     #if DEBUG_TELEPLOT
     // Seltener als der uebrige Debug-Takt: der Wert aendert sich langsam und
@@ -137,5 +162,16 @@ void loop() {
         Serial.print(">ovr:"); Serial.println(overruns);
     }
     #endif
+
+    if (app.wantsSleep()) {
+        attachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1), onMotion, RISING);
+        suspendLoop();                 // hier bleibt die Task stehen
+        detachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1));
+        app.onWake(millis());
+        // Nach dem Schlaf liegt nextSample_us beliebig weit in der
+        // Vergangenheit. Ohne Neuausrichtung liefe die Schleife erst
+        // tausende Overrun-Korrekturen ab, bevor sie wieder im Takt ist.
+        nextSample_us = micros() + cfg::SAMPLE_INTERVAL_US;
+    }
 #endif
 }
