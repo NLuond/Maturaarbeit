@@ -45,12 +45,24 @@ public:
     // geworben. Die Neuverbindung versteckt sich hinter der Bewegung des
     // Nutzers: er hebt den Arm, waehrenddessen verbindet sich BLE, und erst
     // danach kommt die Drehgeste.
+    //
+    // Zuerst die Selbstwiederbelebung abschalten: startAdvertising() hat
+    // restartOnDisconnect(true) gesetzt, und die SoftDevice startet das
+    // Advertising sonst im Disconnect-Ereignis sofort wieder - der Funk
+    // waere im Ruhezustand also weiter an, ohne dass man es sieht.
     void radioOff() {
+        Bluefruit.Advertising.restartOnDisconnect(false);
         Bluefruit.Advertising.stop();
         if (Bluefruit.connected()) Bluefruit.disconnect(Bluefruit.connHandle());
     }
 
-    void radioOn() { Bluefruit.Advertising.start(0); }
+    // Symmetrisch zurueck: ohne das koennte sich das Geraet nach einem
+    // spaeteren, ungewollten Verbindungsabbruch nicht mehr von selbst
+    // zurueckmelden.
+    void radioOn() {
+        Bluefruit.Advertising.restartOnDisconnect(true);
+        Bluefruit.Advertising.start(0);
+    }
 
 private:
     void startAdvertising() {
