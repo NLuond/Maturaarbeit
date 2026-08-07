@@ -1,4 +1,5 @@
 #include <Arduino.h>
+#include <nrf_soc.h>
 #include "config.h"
 #include "ImuReader.h"
 #include "MouseHID.h"
@@ -25,6 +26,20 @@ static uint32_t lastOvrDbg = 0;
 #endif
 
 void setup() {
+    // Der nRF52840 startet mit dem LDO; der DC/DC-Wandler spart bei Last bis
+    // zu etwa 30 Prozent. Bei aktiver SoftDevice darf das Register nicht
+    // direkt beschrieben werden - dort ist sd_power_dcdc_mode_set der
+    // richtige Weg. Der Rueckfall auf den Registerzugriff greift, solange
+    // die SoftDevice nicht laeuft (USB-Zweig).
+    if (sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE) != NRF_SUCCESS) {
+        NRF_POWER->DCDCEN = 1;
+    }
+
+    // Das Mikrofon wird nie benutzt. Seine Versorgung liegt auf einem
+    // eigenen Pin und bleibt aktiv abgeschaltet.
+    pinMode(PIN_PDM_PWR, OUTPUT);
+    digitalWrite(PIN_PDM_PWR, LOW);
+
 #if DEBUG_TELEPLOT || COLLECT_MODE
     Serial.begin(115200);
 #endif
