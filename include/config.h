@@ -301,6 +301,14 @@ namespace cfg {
     // --- Lage -----------------------------------------------------------
     constexpr float MADGWICK_BETA = 0.033f;
 
+    // Nur fuer das Einschwingfenster nach dem Aufwachen. Waehrend des
+    // Schlafs bekommt der Filter keine Samples; mit dem normalen Beta
+    // brauchte er Sekunden, bis die Lage wieder stimmt - und die Drehgeste
+    // haengt an genau diesem Winkel. Dauerhaft waere dieser Wert falsch: der
+    // Filter wuerde dann bei jeder Handbewegung von der
+    // Linearbeschleunigung mitgerissen.
+    constexpr float MADGWICK_BETA_FAST = 0.5f;
+
     // Grenzfrequenz, mit der die Erdbeschleunigung aus dem Accelerometer
     // herausgefiltert wird. Eine gehaltene Handhaltung aendert sich im Bereich
     // unter 1 Hz, die Linearbeschleunigung beim Zeigen deutlich darueber -

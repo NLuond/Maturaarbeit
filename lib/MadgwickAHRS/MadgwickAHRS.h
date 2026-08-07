@@ -8,6 +8,8 @@ public:
     float beta;
     explicit MadgwickAHRS(float b = 0.033f) : beta(b) {}
 
+    void setBeta(float b) { beta = b; }
+
     void update(float Gx, float Gy, float Gz, float Ax, float Ay, float Az, float dt) {
         static const float D2R = 0.017453293f;
         Gx *= D2R; Gy *= D2R; Gz *= D2R;
