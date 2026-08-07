@@ -46,8 +46,20 @@ void setup() {
 }
 
 void loop() {
+    // Warten statt leer durchlaufen. Der Kern ruft loop() in einer engen
+    // Schleife auf; ein sofortiges return hiesse 64 MHz Volllast fuer
+    // nichts. delay() ruft vTaskDelay, und mit configUSE_TICKLESS_IDLE
+    // schlaeft der Kern dabei tatsaechlich.
+    int32_t restUs = (int32_t)(nextSample_us - micros());
+    if (restUs > cfg::SLEEP_MIN_REST_US) {
+        delay((restUs - 1000) / 1000);
+        restUs = (int32_t)(nextSample_us - micros());
+    }
+    // Die letzte Millisekunde genau abwarten - die FreeRTOS-Aufloesung
+    // reicht dafuer nicht.
+    while ((int32_t)(nextSample_us - micros()) > 0) { }
+
     const uint32_t now_us = micros();
-    if ((int32_t)(now_us - nextSample_us) < 0) return;
 
     // Feste Schrittweite statt der tatsaechlich verstrichenen Zeit: alle Filter
     // und das ML-Fenster brauchen eine konstante Abtastrate. Nach einer
