@@ -316,6 +316,22 @@ namespace cfg {
     // Teleplot kostet Serial-Bandbreite und bremst die Schleife. Fuer echte
     // Nutzungstests DEBUG_TELEPLOT ganz ausschalten.
     constexpr uint32_t DEBUG_INTERVAL_US = 20000;
+
+    // --- Akku ------------------------------------------------------------
+    // Selten genug, dass die Messung selbst nichts kostet - die Spannung
+    // aendert sich ueber Stunden, nicht ueber Sekunden.
+    constexpr uint32_t BATTERY_INTERVAL_MS = 30000;
+
+    // Volt je ADC-Schritt: 3.0 V Referenz / 4096 Schritte, multipliziert mit
+    // dem Teilerverhaeltnis der XIAO (ueblicherweise 1 M / 510 k, also
+    // (1000+510)/510 = 2.961).
+    //
+    // Der Wert ist ein Startwert und gehoert kalibriert: eine bekannte
+    // Akkuspannung mit dem Multimeter messen und gegen den Kanal vbat
+    // halten, dann den Faktor nachziehen. Die Angaben zum Teiler sind in der
+    // Literatur uneinheitlich, und eine Laufzeitangabe ist nur so gut wie
+    // die Spannungsmessung, auf der sie beruht.
+    constexpr float BATTERY_VOLTS_PER_LSB = (3.0f / 4096.f) * 2.961f;
 }
 
 

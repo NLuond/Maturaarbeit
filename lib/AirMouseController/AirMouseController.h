@@ -17,6 +17,7 @@
 #include "LowPass.h"
 #include "ArmOrientation.h"
 #include "TwistGuard.h"
+#include "Battery.h"
 
 // Bindeglied zwischen Sensorik und Zustandsautomat. Die Aufgabenteilung:
 //
@@ -48,12 +49,13 @@ public:
     explicit AirMouseController(MouseHID& mouse)
         : mouse_(mouse), ahrs_(cfg::MADGWICK_BETA) {}
 
-    void begin() { haptic_.begin(); }
+    void begin() { haptic_.begin(); battery_.begin(); }
 
     void update(const ImuSample& s, float dt, uint32_t now_us) {
         const uint32_t now_ms = now_us / 1000;
 
         haptic_.update(now_ms);
+        battery_.update(now_ms);
         ahrs_.update(s.gx, s.gy, s.gz, s.ax, s.ay, s.az, dt);
         const float env = envelope_.update(s.accMag, dt);
 
@@ -144,6 +146,7 @@ private:
     TwistToggle        twistToggle_;
     Haptic             haptic_;
     TwistGuard         twistGuard_;
+    Battery            battery_;
 
     bool     clickPulse_ = false;
     float    twist_ = 0.f, elev_ = 0.f;
@@ -275,6 +278,7 @@ private:
         // 0 = gerade, 1 = ausgedreht, 2 = ausgedreht und verbraucht,
         // 3 = Lockout nach dem Schalten.
         Serial.print(">tw:");     Serial.println(twistToggle_.state());
+        Serial.print(">vbat:");   Serial.println(battery_.volts(), 3);
 
     #if DEBUG_SET == DEBUG_ALL || DEBUG_SET == DEBUG_PINCH
         // --- Klick-Kette: env -> gate -> p_ml -> click -------------------
