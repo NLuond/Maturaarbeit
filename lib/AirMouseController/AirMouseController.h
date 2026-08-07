@@ -51,7 +51,14 @@ public:
     AirMouseController(MouseHID& mouse, ImuReader& imu)
         : mouse_(mouse), imu_(imu), ahrs_(cfg::MADGWICK_BETA) {}
 
-    void begin() { haptic_.begin(); battery_.begin(); }
+    void begin() {
+        haptic_.begin();
+        battery_.begin();
+        // Der Sensor kommt aus ImuReader::begin() mit 208 Hz, der Automat
+        // startet aber ausgeschaltet - also in BEREIT. Ohne diese Zeile liefen
+        // die beiden bis zum ersten Einschalten auseinander.
+        imu_.setRate(imuRateActive_ ? ImuRate::Active : ImuRate::Ready);
+    }
 
     void update(const ImuSample& s, float dt, uint32_t now_us) {
         const uint32_t now_ms = now_us / 1000;
@@ -166,7 +173,13 @@ public:
 
     void onWake(uint32_t now_ms) {
         imu_.disableWakeOnMotion();
-        imu_.setRate(ImuRate::Active);
+        // Aufgewacht heisst BEREIT, nicht AKTIV: bewegt wurde der Arm, die
+        // Einschalt-Drehgeste kommt erst noch. Die Rate folgt deshalb dem
+        // Zustand des Automaten, und imuRateActive_ wird mitgefuehrt - sonst
+        // liefe der Sensor mit 208 Hz weiter, waehrend die Schleife mit 52 Hz
+        // taktet, und apply() saehe keinen Wechsel mehr.
+        imuRateActive_ = fsm_.on();
+        imu_.setRate(imuRateActive_ ? ImuRate::Active : ImuRate::Ready);
         mouse_.radioOn();
         // Erhoehtes Beta, damit die Lage nach dem Schlaf schnell wieder auf
         // die Schwerkraft einrastet. SleepEvent::Settled stellt es zurueck.
