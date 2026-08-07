@@ -276,8 +276,11 @@ einzeln einschaltet.
 1. **`BATTERY_VOLTS_PER_LSB` kalibrieren.** Akkuspannung mit dem Multimeter
    messen und gegen `vbat` halten, Faktor nachziehen. Alles Weitere hängt an
    dieser Zahl.
-2. **`ovr` nach dem Schleifen-Umbau.** Muss bei 0 bleiben. Steigt er, schläft
-   die Schleife zu lange und die feste Schrittweite stimmt nicht mehr.
+2. **`ovr` und `late` nach dem Schleifen-Umbau.** `ovr` muss bei 0 bleiben.
+   Steigt er, schläft die Schleife zu lange und die feste Schrittweite stimmt
+   nicht mehr. `ovr` allein genügt aber nicht — er hat einen blinden Fleck von
+   zwei Takten (siehe Nebenbedingungen unten). `late` zeigt die tatsächliche
+   Verspätung jedes Takts und ist der eigentliche Messwert.
 3. **Stromaufnahme je Zustand**, Multimeter in Serie: AKTIV, BEREIT, SCHLAF.
    Gegen die Schätzwerte im Design halten (~2–3 mA / ~1 mA / ~0.03–0.05 mA).
 4. **`WAKE_UP_THRESHOLD` einstellen.** Armheben muss wecken, ein Klopfen auf
@@ -301,23 +304,73 @@ danach:**
   Im committeten USB-Build sind `radioOff()`/`radioOn()` leere Hüllen
   (`MouseHID.h`) — dort zu messen heisst, eine Funktion zu messen, die es gar
   nicht gibt.
-- **`ovr` schlägt nur bei einem ganzen verpassten Takt aus** (in AKTIV 4785 µs, in
-  BEREIT 19230 µs — der blinde Fleck ist dort also viermal so breit, ausgerechnet im
-  Zustand, in dem meistens gemessen wird). Feinere Verschiebungen durch die gröbere
-  `delay()`-Auflösung bleiben für ihn unsichtbar — „`ovr` bleibt 0" ist für sich
-  allein also kein Beleg dafür, dass die schlafende Schleife den Takt wirklich hält.
+- **`ovr` schlägt erst bei ZWEI verpassten Takten aus** — in AKTIV also erst ab
+  9570 µs Verspätung, in BEREIT erst ab 38460 µs. Grund: `nextSample_us` ist beim
+  Überlauftest schon weitergestellt, die Bedingung
+  `now_us - nextSample_us > tickUs` misst deshalb gegen `2 × tickUs` ab dem
+  ursprünglich geplanten Zeitpunkt. Der blinde Fleck ist in BEREIT viermal so breit
+  wie in AKTIV, ausgerechnet im Zustand, in dem meistens gemessen wird. Feinere
+  Verschiebungen bleiben unsichtbar — „`ovr` bleibt 0" ist für sich allein also
+  kein Beleg dafür, dass die schlafende Schleife den Takt wirklich hält. Dafür
+  gibt es jetzt den Kanal **`late`** (Verspätung jedes Takts in µs, vor dem
+  Weiterstellen gemessen). Erwartungswert: Stufen von rund 977 µs, nicht glatte
+  Mikrosekunden — `micros()` kommt aus dem 1024-Hz-FreeRTOS-Tick, `dwt_enable()`
+  wird nirgends gerufen. Genau diese Quantisierung ist der Beleg dafür.
 - **Enttäuscht die SCHLAF-Zahl, zuerst den Interrupt verdächtigen, nicht die
   IMU-Konfiguration.** `attachInterrupt` läuft über den GPIOTE-Event-Modus,
   der seine Erkennungsschaltung getaktet hält und dadurch messbar mehr
   Ruhestrom kostet als der stromsparende SENSE/PORT-Mechanismus.
+
+  **Der Wechsel auf SENSE ist aber teurer, als er klingt.** Der
+  `GPIOTE_IRQHandler` des Adafruit-Kerns iteriert ausschliesslich über
+  `EVENTS_IN[ch]` und hat **keinen PORT-Ereignispfad**; der Handler ist zudem
+  nicht `weak`, lässt sich also nicht einfach überschreiben. SENSE zu benutzen
+  hiesse, einen eigenen ISR gegen den des Kerns zu schreiben — für eine
+  Maturaarbeit ein unverhältnismässiger Eingriff mit echtem Regressionsrisiko.
+
+  **Die billige Alternative:** den ISR ganz weglassen und die Schleife INT1
+  schlafend abfragen (`delay(250)` zwischen den Abfragen). Vier kurze
+  Aufwachvorgänge pro Sekunde kosten weit weniger als der dauernd getaktete
+  GPIOTE-Ereignismodus. Der Handel: man gibt die Eigenschaft „es wird gar nichts
+  gepollt" auf — und die ist nichts wert, wenn der Mechanismus, der sie erhält,
+  mehr kostet als das Pollen selbst.
+- **`delay()` schläft in diesem Kern nicht immer.** Die Implementierung ruft
+  zuerst `TinyUSB_Device_FlushCDC()` und kehrt **ohne jedes `vTaskDelay` zurück**,
+  wenn das Leeren des Puffers das ganze angeforderte Intervall verbraucht hat
+  (`cores/nRF5/delay.c`). Mit `DEBUG_TELEPLOT true` und vollem CDC-Puffer kann die
+  Schleife dadurch einen kompletten Takt lang durchdrehen statt zu schlafen. Ein
+  überraschend hoher Stromwert beim Einstellen gehört zuerst gegen diesen
+  Mechanismus geprüft — und nicht der IMU-Konfiguration angelastet.
 - **Nach dem Aufwachen braucht das Gyroskop seine Einlaufzeit.** Am Teleplot
   prüfen, dass in der ersten Sekunde nach dem Wecken kein falsches `Toggle`
   oder `Held` auftritt.
 - **Der Gyro-Bias-Lerner sieht während dieser Einlaufzeit nahezu null** und
   verschiebt den Nullpunkt bei jedem Aufwachen ein kleines Stück. Nach vielen
   Weck-Zyklen einmal nachsehen, ob der Cursor davon merklich driftet.
-- **Bewusster Langzeit-Lauftest:** über 75 Minuten laufen lassen, dann
-  schlafen legen und wecken. Die aus `micros()` abgeleitete Millisekunde
-  läuft alle 71.58 Minuten über, und ein verirrtes Einschlafen in BEREIT je
-  Überlauf ist bewusst in Kauf genommen — prüfen, dass es sich bei der
-  nächsten Bewegung von selbst heilt statt sich zu wiederholen.
+- **Der 71.58-Minuten-Überlauf ist erledigt** (Whole-Branch-Review). Der
+  Controller rechnet nicht mehr mit `now_us / 1000`, sondern mit `millis()`.
+  `micros()` läuft bei 2³² über, der Quotient daraus also schon bei 4 294 967 —
+  und dann ist die vorzeichenlose Differenzarithmetik ungültig, auf der jeder
+  Zeitgeber beruht. Der Langzeit-Lauftest über 75 Minuten bleibt trotzdem
+  sinnvoll, jetzt aber als Gegenprobe: es darf **kein** verirrtes Einschlafen
+  mehr auftreten. (Auch `millis()` ist auf diesem Kern kein sauberer
+  2³²-Zähler — es stammt aus dem 32-Bit-Tick bei 1024 Hz und springt bei
+  4 194 304 000 ms, also nach rund 48.5 Tagen, zurück. Für dieses Gerät
+  irrelevant, aber der Vollständigkeit halber notiert.)
+
+- **`MadgwickAHRS::alignToGravity(ax, ay, az)` — die bessere Antwort auf das
+  Einschwingfenster, bewusst noch nicht gebaut.** `SleepTuning::settleMs` steht
+  jetzt auf 1500 ms statt 300, weil `MADGWICK_BETA_FAST` = 0.5 rad/s ≈ 28.6 °/s
+  entspricht: 300 ms erlaubten nur rund 8.6° Nachführung, 1.5 s erlauben rund
+  43°. Das ist die konservative Lösung, nicht die saubere.
+
+  Sauber wäre, das Quaternion nach dem Aufwachen **direkt aus einer einzigen
+  Beschleunigungsmessung zu setzen**: Roll und Pitch sind durch die
+  Erdbeschleunigung exakt bestimmt, es gibt nichts einzuschwingen. Das Fenster
+  wäre danach eine Formsache und das erhöhte Beta überflüssig — man spart sich
+  zwei gekoppelte Zahlen, die niemand miteinander multipliziert hat. Für die
+  Arbeit ist das einen Absatz wert: es zeigt den Unterschied zwischen „Parameter
+  so lange vergrössern, bis es reicht" und „das Problem an der Wurzel lösen".
+
+  **Abnahmetest** für den am Ende benutzten Wert ist in beiden Fällen Schritt 5
+  des Messplans Stromsparen (`rtwist` unmittelbar nach dem Wecken).

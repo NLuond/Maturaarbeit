@@ -15,7 +15,17 @@ struct SleepTuning {
     // als Ruhe zaehlen, und die Erdbeschleunigung liegt immer an.
     float    stillDps   = 20.f;
     uint32_t sleepAfter = 60000;   // ms Ruhe bis zum Schlaf
-    uint32_t settleMs   = 300;     // Sperre nach dem Aufwachen
+
+    // Sperre nach dem Aufwachen, und zugleich das Fenster, in dem Madgwick
+    // mit cfg::MADGWICK_BETA_FAST laeuft. Die beiden Zahlen gehoeren
+    // miteinander gerechnet: Beta 0.5 rad/s sind rund 28.6 Grad/s
+    // Korrekturgeschwindigkeit, die frueheren 300 ms erlaubten also nur rund
+    // 8.6 Grad Nachfuehrung - viel zu wenig fuer den Zweck, denn nach einem
+    // Schlaf, waehrend dessen der Arm langsam gedreht wurde, kann die
+    // Lageschaetzung um ein Vielfaches danebenliegen. 1500 ms ergeben rund
+    // 43 Grad. Die Zeit kostet nichts: der Benutzer hebt in dieser Sekunde
+    // ohnehin gerade den Arm.
+    uint32_t settleMs   = 1500;
 };
 
 enum class SleepEvent : uint8_t {

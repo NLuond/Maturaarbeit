@@ -111,10 +111,22 @@ public:
         imu_.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_DUR, 0x00);
         imu_.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_THS, cfg::WAKE_UP_THRESHOLD);
         imu_.writeRegister(LSM6DS3_ACC_GYRO_MD1_CFG,     0x20);   // INT1_WU
-        imu_.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1,    0x80);   // Interrupts frei
+        // Bit 0 ist LIR: INT1 bleibt stehen, bis WAKE_UP_SRC gelesen wird.
+        // Ohne die Verriegelung gibt es nur eine kurze Flanke, und faellt die
+        // zwischen attachInterrupt() und suspendLoop(), ist sie verloren -
+        // vTaskResume zaehlt nicht. main.cpp prueft den Pegel deshalb vor dem
+        // Suspend, und das setzt einen stehenden Pegel voraus.
+        imu_.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1,    0x81);   // Interrupts frei + LIR
     }
 
     void disableWakeOnMotion() {
+        // Die Reihenfolge traegt seit LIR: erst die Wegleitung auf INT1
+        // kappen und die Interrupts sperren, danach WAKE_UP_SRC lesen, um die
+        // Verriegelung zu loesen. Umgekehrt koennte zwischen dem Lesen und dem
+        // Abschalten ein neues Ereignis den Pegel erneut setzen und stehen
+        // lassen - INT1 laege dann dauerhaft hoch, und die naechste
+        // Pegelpruefung vor dem Schlafenlegen saehe ein Ereignis, das keines
+        // ist.
         imu_.writeRegister(LSM6DS3_ACC_GYRO_MD1_CFG,  0x00);
         imu_.writeRegister(LSM6DS3_ACC_GYRO_TAP_CFG1, 0x00);
         // Die Quelle einmal lesen, damit ein noch anstehendes Ereignis

@@ -77,12 +77,6 @@ namespace cfg {
     constexpr uint32_t SAMPLE_INTERVAL_US = 4785;
     constexpr float    DT                 = SAMPLE_INTERVAL_US * 1e-6f;
 
-    // Ab welchem Rest die Schleife schlafen legt statt zu warten. Die
-    // FreeRTOS-Aufloesung betraegt 1 ms, der Takt muss aber auf wenige
-    // Mikrosekunden genau bleiben - deshalb wird die letzte Millisekunde
-    // bewusst abgewartet und nicht verschlafen.
-    constexpr int32_t SLEEP_MIN_REST_US = 1500;
-
     // Nullpunkt des Gyroskops driftet mit der Temperatur. Er wird nur
     // nachgefuehrt, solange das Geraet wirklich ruhig liegt.
     //

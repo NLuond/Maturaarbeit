@@ -94,7 +94,8 @@ static void test_settlingWindowAfterWake() {
     run(p, false, 0.f, now, 65000);
     p.wake(now);
     CHECK(p.settling(), "nach dem Aufwachen wird nicht eingeschwungen");
-    CHECK(run(p, false, 100.f, now, 200) == SleepEvent::None,
+    // Knapp vor settleMs (1500) darf noch nichts kommen, knapp danach muss es.
+    CHECK(run(p, false, 100.f, now, 1400) == SleepEvent::None,
           "Settled kommt zu frueh");
     CHECK(p.settling(), "das Einschwingfenster endet zu frueh");
     CHECK(run(p, false, 100.f, now, 200) == SleepEvent::Settled,
@@ -107,15 +108,15 @@ static void test_settledComesOnce() {
     uint32_t now = 1000;
     run(p, false, 0.f, now, 65000);
     p.wake(now);
-    run(p, false, 100.f, now, 400);                       // Settled
-    CHECK(run(p, false, 100.f, now, 400) == SleepEvent::None,
+    run(p, false, 100.f, now, 1600);                      // Settled
+    CHECK(run(p, false, 100.f, now, 1600) == SleepEvent::None,
           "Settled kommt mehrfach");
 }
 
 // Nach dem Aufwachen laeuft der Zeitgeber neu an - sonst schliefe das Geraet
 // unmittelbar nach dem Wecken wieder ein.
 //
-// Geprueft wird "kein GoToSleep" und nicht "None": in den ersten 300 ms nach
+// Geprueft wird "kein GoToSleep" und nicht "None": in den ersten 1500 ms nach
 // dem Aufwachen kommt zwangslaeufig das Settled-Ereignis, und run() liefert
 // das zuletzt gesehene zurueck.
 static void test_timerRestartsAfterWake() {

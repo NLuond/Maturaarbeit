@@ -61,11 +61,34 @@ public:
     }
 
     void update(const ImuSample& s, float dt, uint32_t now_us) {
-        const uint32_t now_ms = now_us / 1000;
+        // millis() statt now_us/1000: micros() laeuft bei 2^32 ueber, der
+        // Quotient daraus also schon bei 4'294'967 - und dann ist die
+        // vorzeichenlose Differenzarithmetik ungueltig, auf der jeder
+        // Zeitgeber hier beruht. SleepPolicy saehe in dem einen Takt eine
+        // Luecke von rund 4.29e9 ms und legte das Geraet sofort schlafen,
+        // TwistToggle koennte ein Held melden, PoseDetector eine wartende
+        // Haltung augenblicklich uebernehmen.
+        //
+        // millis() kommt aus derselben Tickquelle wie micros() (FreeRTOS,
+        // 1024 Hz), laeuft also mit ihr im Gleichtakt. Es springt erst beim
+        // Ueberlauf des 32-Bit-Ticks zurueck, nach rund 48.5 Tagen. Auch das
+        // ist kein sauberer 2^32-Ueberlauf - der Sprung liegt bei
+        // 4'194'304'000 ms -, aber statt alle 71.58 Minuten nur noch alle
+        // sieben Wochen.
+        const uint32_t now_ms = millis();
 
         haptic_.update(now_ms);
         battery_.update(now_ms);
         ahrs_.update(s.gx, s.gy, s.gz, s.ax, s.ay, s.az, dt);
+        // Laeuft auch in BEREIT, dort mit 52 Hz - also oberhalb der
+        // Nyquist-Frequenz des eigenen 30-Hz-Hochpasses. Das ist wissentlich
+        // hingenommen und harmlos: env wird ausschliesslich unter fsm_.on()
+        // ausgewertet, und dort taktet die Schleife mit 209 Hz. Der
+        // nachgeschaltete 15-Hz-Tiefpass ist nach dem Wechsel nach AKTIV
+        // innerhalb von rund 30 ms (drei Zeitkonstanten) wieder eingelaufen,
+        // lange bevor ein Pinch bewertet wird. Den Filter in BEREIT
+        // anzuhalten waere also kein Gewinn, sondern nur eine Fallunterscheidung
+        // mehr.
         const float env = envelope_.update(s.accMag, dt);
 
     #if DEBUG_TELEPLOT
@@ -163,14 +186,6 @@ public:
 
     bool wantsSleep() const { return sleep_.wantsSleep(); }
 
-    // Reihenfolge ist wichtig: erst der Funk, dann die IMU. Umgekehrt liefe
-    // der Funk noch, waehrend die IMU schon nichts mehr meldet.
-    void prepareSleep() {
-        mouse_.radioOff();
-        imu_.setRate(ImuRate::Sleep);
-        imu_.enableWakeOnMotion();
-    }
-
     void onWake(uint32_t now_ms) {
         imu_.disableWakeOnMotion();
         // Aufgewacht heisst BEREIT, nicht AKTIV: bewegt wurde der Arm, die
@@ -230,6 +245,22 @@ private:
         return asinf(constrain(comp / mag, -1.f, 1.f)) * 57.29578f;
     }
 #endif
+
+    // Privat, obwohl es wie ein Bedienschritt aussieht: die einzige
+    // Aufrufstelle ist SleepEvent::GoToSleep in update(). Diese Methode
+    // stellt die IMU absichtlich auf ImuRate::Sleep und bricht damit die
+    // dokumentierte Zusage, dass die Sensorrate dem Zustand des Automaten
+    // folgt - von aussen gerufen liefe die Schleife mit 52 Hz weiter,
+    // waehrend der Sensor nur noch 26 Hz liefert. Wer schlafen legen will,
+    // fragt wantsSleep() ab.
+    //
+    // Reihenfolge ist wichtig: erst der Funk, dann die IMU. Umgekehrt liefe
+    // der Funk noch, waehrend die IMU schon nichts mehr meldet.
+    void prepareSleep() {
+        mouse_.radioOff();
+        imu_.setRate(ImuRate::Sleep);
+        imu_.enableWakeOnMotion();
+    }
 
     // Die einzige Stelle, an der Aktionen des Automaten Wirkung entfalten.
     void apply(const Actions& a, uint32_t now_ms) {

@@ -87,16 +87,25 @@ void loop() {
     // Schleife auf; ein sofortiges return hiesse 64 MHz Volllast fuer
     // nichts. delay() ruft vTaskDelay, und mit configUSE_TICKLESS_IDLE
     // schlaeft der Kern dabei tatsaechlich.
-    int32_t restUs = (int32_t)(nextSample_us - micros());
-    if (restUs > cfg::SLEEP_MIN_REST_US) {
-        delay((restUs - 1000) / 1000);
-        restUs = (int32_t)(nextSample_us - micros());
-    }
-    // Die letzte Millisekunde genau abwarten - die FreeRTOS-Aufloesung
-    // reicht dafuer nicht.
-    while ((int32_t)(nextSample_us - micros()) > 0) { }
+    //
+    // micros() ist auf diesem Kern aus dem FreeRTOS-Tick abgeleitet (1024 Hz,
+    // rund 977 us je Schritt) - dwt_enable() wird nirgends gerufen. Eine
+    // Warteschleife kann den Takt also gar nicht feiner treffen als
+    // vTaskDelay, sie wuerde nur mit 64 MHz Strom verbrennen. Deshalb wird
+    // bis zum Takt geschlafen und nicht gewartet.
+    while ((int32_t)(nextSample_us - micros()) > 0) delay(1);
 
     const uint32_t now_us = micros();
+
+#if DEBUG_TELEPLOT && !COLLECT_MODE
+    // Verspaetung dieses Takts, gemessen BEVOR nextSample_us weitergestellt
+    // wird - danach waere der Wert um tickUs zu klein. ovr schlaegt erst bei
+    // einem ganzen verpassten Takt aus und sieht kleineres Zittern nicht;
+    // genau dieses Zittern soll der Kanal zeigen. Die Werte kommen in Stufen
+    // von rund 977 us, weil micros() aus dem 1024-Hz-Tick stammt - diese
+    // Quantisierung ist selbst der Beleg fuer die grobe Zeitaufloesung.
+    const int32_t lateUs = (int32_t)(now_us - nextSample_us);
+#endif
 
 #if COLLECT_MODE
     // Die Aufnahme braucht durchgehend die feste ML-Rate. Es gibt hier
@@ -159,20 +168,28 @@ void loop() {
     // soll die Schleife nicht zusaetzlich belasten.
     if (now_us - lastOvrDbg >= 200000) {
         lastOvrDbg = now_us;
-        Serial.print(">ovr:"); Serial.println(overruns);
+        Serial.print(">ovr:");  Serial.println(overruns);
+        Serial.print(">late:"); Serial.println(lateUs);
     }
     #endif
 
     if (app.wantsSleep()) {
         attachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1), onMotion, RISING);
-        suspendLoop();                 // hier bleibt die Task stehen
+        // Mit LIR haelt INT1 eine Flanke, die zwischen dem Scharfstellen und
+        // hier gefallen ist. Ohne diese Pruefung ginge sie verloren:
+        // vTaskResume zaehlt nicht, ein Resume vor dem Suspend ist weg - und
+        // die Maus schliefe bis zur naechsten Bewegung weiter. INT1 ist aktiv
+        // HIGH (CTRL3_C.H_LACTIVE bleibt auf der Vorgabe 0), LOW heisst also
+        // "nichts steht an".
+        if (digitalRead(PIN_LSM6DS3TR_C_INT1) == LOW) suspendLoop();
         detachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1));
-        // Nicht millis(): der ganze Controller rechnet mit der aus micros()
-        // abgeleiteten Millisekunde (now_ms = now_us / 1000), und die laeuft
-        // alle 71.58 Minuten auf 0 zurueck, waehrend millis() bis 49.7 Tage
-        // durchzaehlt. Mischt man beide Uhren, sieht SleepPolicy nach dem
-        // ersten Ueberlauf eine riesige Zeitdifferenz statt einer kleinen.
-        app.onWake(micros() / 1000);
+        // millis() und nicht micros()/1000: der Quotient aus micros() laeuft
+        // schon bei 4'294'967 ueber, und dann ist die vorzeichenlose
+        // Differenzarithmetik im Controller ungueltig. Beide Uhren stammen aus
+        // demselben FreeRTOS-Tick, laufen also im Gleichtakt - der Controller
+        // rechnet seit dieser Aenderung ebenfalls mit millis(), gemischt wird
+        // nichts.
+        app.onWake(millis());
         // Nach dem Schlaf liegt nextSample_us beliebig weit in der
         // Vergangenheit. Ohne Neuausrichtung liefe die Schleife erst
         // tausende Overrun-Korrekturen ab, bevor sie wieder im Takt ist.

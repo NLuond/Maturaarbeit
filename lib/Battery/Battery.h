@@ -13,6 +13,13 @@
 // gemittelt - der ADC rauscht, und die Spannung aendert sich ueber Stunden.
 class Battery {
 public:
+    // Anzahl der gemittelten Wandlungen. Als Konstante und nicht zweimal als
+    // Ziffer: Schleife und Teiler muessen zwingend dieselbe Zahl benutzen,
+    // sonst ist das Ergebnis stillschweigend um den Faktor daneben.
+    // Steht hier und nicht in cfg::, weil es keine Einstellgroesse ist,
+    // sondern eine Eigenschaft dieser Mittelung.
+    static constexpr int kOversample = 8;
+
     void begin() {
         pinMode(VBAT_ENABLE, OUTPUT);
         digitalWrite(VBAT_ENABLE, HIGH);      // aktiv LOW: Teiler aus
@@ -27,10 +34,10 @@ public:
 
         digitalWrite(VBAT_ENABLE, LOW);       // Teiler zu
         uint32_t sum = 0;
-        for (int i = 0; i < 8; i++) sum += analogRead(PIN_VBAT);
+        for (int i = 0; i < kOversample; i++) sum += analogRead(PIN_VBAT);
         digitalWrite(VBAT_ENABLE, HIGH);      // und wieder weg
 
-        volts_ = (sum / 8.f) * cfg::BATTERY_VOLTS_PER_LSB;
+        volts_ = (sum / (float)kOversample) * cfg::BATTERY_VOLTS_PER_LSB;
     }
 
     float volts() const { return volts_; }

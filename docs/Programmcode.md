@@ -79,7 +79,9 @@ zeitlich gestauchtes oder gedehntes Fenster und wird still schlechter, ohne dass
 Fehler auftritt.
 
 Der Zähler `overruns` zählt verpasste Takte. Er ist im Teleplot als Kanal `ovr` sichtbar
-und im Aufnahmemodus zusätzlich an die eingebaute LED gekoppelt (Abschnitt 11).
+und im Aufnahmemodus zusätzlich an die eingebaute LED gekoppelt (Abschnitt 11). Er hat
+allerdings einen blinden Fleck von zwei Takten und wird deshalb vom Kanal `late` ergänzt,
+der die Verspätung jedes einzelnen Takts in µs ausgibt — siehe Abschnitt 9.1.
 
 ---
 
@@ -677,21 +679,32 @@ durchgehend mit 64 MHz und tat in rund 97 % der Zeit nichts. Das war der grösst
 Verbraucher im ganzen Gerät, unabhängig vom Betriebszustand.
 
 ```cpp
-int32_t restUs = (int32_t)(nextSample_us - micros());
-if (restUs > cfg::SLEEP_MIN_REST_US) {
-    delay((restUs - 1000) / 1000);
-    restUs = (int32_t)(nextSample_us - micros());
-}
-while ((int32_t)(nextSample_us - micros()) > 0) { }   // letzte Millisekunde exakt
+while ((int32_t)(nextSample_us - micros()) > 0) delay(1);
 ```
 
 `delay()` ruft intern `vTaskDelay`, und mit `configUSE_TICKLESS_IDLE` schläft der
-FreeRTOS-Kern für diese Zeit tatsächlich, statt nur den Aufrufer zu blockieren. Die letzte
-Millisekunde wird bewusst *nicht* verschlafen: die FreeRTOS-Auflösung beträgt 1 ms, der
-Takt von 4785 µs muss aber auf wenige Mikrosekunden genau bleiben — sonst driftet das
-ML-Fenster genau wie bei einem verpassten Takt. Diese eine Änderung wirkt in **jedem**
-Zustand, in dem das Gerät tatsächlich läuft (AKTIV wie BEREIT), und kostet nichts am
-Verhalten — der Overrun-Zähler `ovr` bleibt die Kontrolle, ob der Takt trotzdem hält.
+FreeRTOS-Kern für diese Zeit tatsächlich, statt nur den Aufrufer zu blockieren.
+
+Die erste Fassung dieser Schleife wartete die letzte Millisekunde noch in einer leeren
+`while`-Schleife ab, mit der Begründung, die FreeRTOS-Auflösung von 1 ms sei für einen
+Takt von 4785 µs zu grob. **Diese Begründung war falsch**, und der Whole-Branch-Review hat
+sie aufgedeckt. `micros()` ist auf diesem Kern gar keine Mikrosekunden-Uhr: `delay.h`
+liefert `dwt_enabled() ? (DWT->CYCCNT / 64) : tick2us(xTaskGetTickCount())`, und
+`dwt_enable()` wird nirgends aufgerufen — weder vom Kern, noch von `SystemInit` (das
+setzt `TRCENA` nur unter `ENABLE_SWO`/`ENABLE_TRACE`, beide undefiniert), noch von diesem
+Projekt. `micros()` steppt also im FreeRTOS-Tick von 1024 Hz, in Schritten von rund
+977 µs. Die Warteschleife pollte damit **dieselbe Uhr, auf die `vTaskDelay` schläft** —
+sie konnte gar nichts feiner auflösen und hat nur 1–2 ms je Takt mit 64 MHz verbrannt.
+Beide Fassungen treffen exakt denselben Tick; die neue schläft dabei.
+
+Diese Änderung wirkt in **jedem** Zustand, in dem das Gerät tatsächlich läuft (AKTIV wie
+BEREIT), und kostet nichts am Verhalten. Zur Kontrolle dienen zwei Teleplot-Kanäle: `ovr`
+zählt ganz verpasste Takte, und `late` gibt die tatsächliche Verspätung jedes Takts in µs
+aus. `late` ist der aussagekräftigere von beiden — `ovr` schlägt erst bei **zwei**
+verpassten Takten an (9570 µs in AKTIV, 38460 µs in BEREIT), weil `nextSample_us` beim
+Überlauftest bereits weitergestellt ist. Die Werte von `late` kommen in Stufen von rund
+977 µs statt in glatten Mikrosekunden — diese Quantisierung ist zugleich der direkte
+Messbeleg für die eben beschriebene Tick-Auflösung.
 
 **Die Compiler-Flags dagegen sind der kleinste Posten.** `-O2` (statt `-O1`), `-DNDEBUG`
 und `-ffunction-sections`/`-fdata-sections`/`-Wl,--gc-sections` in `platformio.ini` stehen
@@ -753,6 +766,33 @@ nichts verloren — alles Weitere geschieht erst in der Task, sobald sie nach
 schaltet den Funk wieder an und erhöht kurzzeitig das Madgwick-Beta. Die Neuausrichtung
 des Schleifentakts folgt erst danach, in `main.cpp` selbst — siehe Abschnitt 9.3.
 
+**Zwischen dem Scharfstellen und dem Einschlafen liegt ein Rennen**, das der
+Whole-Branch-Review gefunden hat. `attachInterrupt()` und `suspendLoop()` sind zwei
+getrennte Anweisungen. Fällt die INT1-Flanke dazwischen, ruft die ISR
+`xTaskResumeFromISR` auf eine Task auf, die noch gar nicht suspendiert ist — und
+`vTaskSuspend`/`vTaskResume` **zählen nicht**. Das Resume verpufft, die Task suspendiert
+sich unmittelbar danach trotzdem, und die Bewegung, die hätte wecken sollen, ist verloren.
+Mit `RISING` und ohne Verriegelung gibt es auch keine zweite Flanke, auf die man hoffen
+könnte: das Gerät bliebe schlafen, bis es zufällig erneut bewegt wird.
+
+Der Ausweg sind zwei zusammengehörende Änderungen. `enableWakeOnMotion()` setzt in
+`TAP_CFG1` zusätzlich das LIR-Bit (`0x81` statt `0x80`), womit INT1 stehen bleibt, bis
+`WAKE_UP_SRC` gelesen wird — aus der flüchtigen Flanke wird ein gehaltener Pegel. Und
+`main.cpp` prüft diesen Pegel, bevor es sich schlafen legt:
+
+```cpp
+attachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1), onMotion, RISING);
+if (digitalRead(PIN_LSM6DS3TR_C_INT1) == LOW) suspendLoop();
+```
+
+INT1 ist bei diesem Baustein aktiv High (`CTRL3_C.H_LACTIVE` bleibt auf der Vorgabe 0),
+`LOW` heisst also zuverlässig „es steht nichts an". Steht doch etwas an, wird der
+Schlafschritt einfach übersprungen und der Weck-Pfad läuft sofort durch. Damit ist auch
+die Reihenfolge in `disableWakeOnMotion()` tragend geworden: erst die Wegleitung auf INT1
+kappen, dann `WAKE_UP_SRC` lesen, um die Verriegelung zu lösen. Umgekehrt könnte zwischen
+Lesen und Abschalten ein neues Ereignis den Pegel erneut setzen und stehen lassen — INT1
+läge dann dauerhaft hoch, und die nächste Pegelprüfung sähe ein Ereignis, das keines ist.
+
 ### 9.3 Einschwingen nach dem Aufwachen
 
 Zwei Dinge sind beim Aufwachen kurzzeitig falsch, und beide hängen an derselben Ursache:
@@ -761,9 +801,23 @@ Während des Schlafs bekommt nichts neue Samples.
 **Die Lageschätzung ist veraltet.** Madgwick lief zuletzt vor bis zu 60 Sekunden; die
 Ein/Aus-Drehgeste hängt aber genau an diesem Winkel und könnte danebengreifen oder von
 allein auslösen. `onWake()` setzt deshalb kurzzeitig ein stark erhöhtes Beta
-(`MADGWICK_BETA_FAST = 0.5` statt `0.033`), bis die Lage nach `settleMs` (300 ms) wieder
+(`MADGWICK_BETA_FAST = 0.5` statt `0.033`), bis die Lage nach `settleMs` (1500 ms) wieder
 auf die Schwerkraft eingerastet ist (`SleepEvent::Settled` stellt das normale Beta
-zurück). Für dieses Fenster bleibt `TwistToggle` gesperrt — nicht über einen neuen
+zurück).
+
+Die 1500 ms sind eine Korrektur aus dem Whole-Branch-Review: ursprünglich standen hier
+300 ms, und die beiden Zahlen waren in verschiedenen Arbeitsschritten gewählt und nie
+miteinander multipliziert worden. Ein Beta von 0.5 rad/s entspricht rund 28,6 °/s
+Korrekturgeschwindigkeit — in 300 ms also ganze 8,6° Nachführung, während der ganze Zweck
+des Fensters ist, eine Lage einzufangen, die nach einem Schlaf mit langsamer Armdrehung
+um ein Vielfaches danebenliegen kann. 1500 ms erlauben rund 43°, und die Zeit kostet
+nichts: der Benutzer hebt in dieser Sekunde ohnehin gerade den Arm. Die sauberere Lösung
+wäre, das Quaternion direkt aus einer einzigen Beschleunigungsmessung zu setzen
+(`alignToGravity()`) — Roll und Pitch sind durch die Schwerkraft exakt bestimmt, das
+Fenster wäre dann eine Formsache und das erhöhte Beta überflüssig. Sie ist in `TODO.md`
+festgehalten, aber bewusst nicht mehr gebaut worden.
+
+Für dieses Fenster bleibt `TwistToggle` gesperrt — nicht über einen neuen
 Mechanismus, sondern über denselben Weg, mit dem auch eine nicht-waagrechte Haltung die
 Geste verwirft: `tick()` bekommt `level = false` übergeben, solange `sleep_.settling()`
 wahr ist.
@@ -776,11 +830,24 @@ nicht mit `cfg::SAMPLE_INTERVAL_US`: der Automat ist nach dem Aufwachen in BEREI
 läuft also schon auf 52 Hz, und mit der falschen Konstante läge der nächste erwartete
 Zeitpunkt vor dem nächsten tatsächlichen Sample.
 
-Eine Nebenbedingung dabei: Die Millisekunde, mit der `SleepPolicy` und der Rest des
-Controllers rechnen, kommt aus `micros() / 1000` und nicht aus `millis()`. Beide Uhren
-laufen unterschiedlich lange, bevor sie überlaufen — die aus `micros()` abgeleitete alle
-71,58 Minuten, `millis()` erst nach 49,7 Tagen. Würde man beide mischen, sähe
-`SleepPolicy` nach dem ersten Überlauf eine riesige statt einer kleinen Zeitdifferenz.
+Eine Nebenbedingung dabei betrifft die Millisekunde, mit der `SleepPolicy` und der Rest
+des Controllers rechnen. Sie kam ursprünglich aus `micros() / 1000`, und das war ein
+Fehler, den erst der Whole-Branch-Review sichtbar gemacht hat: `micros()` läuft bei 2³²
+über, der **Quotient** daraus also schon bei 4 294 967. Vorzeichenlose
+Differenzarithmetik (`now_ms - tPrev`) ist aber nur dann gültig, wenn der Zähler an der
+Breite seines Typs überläuft — und genau diese Differenz bildet jeder Zeitgeber im
+Projekt. Alle 71,58 Minuten hätte `SleepPolicy` in einem einzigen Takt eine Lücke von
+rund 4,29 · 10⁹ ms gesehen und das Gerät sofort schlafen gelegt; `TwistToggle` hätte ein
+falsches `Held` melden, `PoseDetector` eine wartende Haltung augenblicklich übernehmen
+können.
+
+Der Controller rechnet deshalb mit `millis()`. Beide Uhren stammen aus derselben Quelle,
+dem FreeRTOS-Tick mit 1024 Hz, laufen also im Gleichtakt — gemischt wird nichts, und
+`now_us` behält seine eigenen Verwendungen (`nextSample_us`, das Berichtsintervall zum
+Host, das Debug-Intervall). `millis()` springt erst beim Überlauf des 32-Bit-Ticks
+zurück, nach rund 48,5 Tagen. Streng genommen ist auch das kein sauberer 2³²-Überlauf —
+der Sprung liegt bei 4 194 304 000 ms —, aber statt alle 71,58 Minuten nur noch alle
+sieben Wochen, und das ist für ein Akkugerät mit Schlafzyklen ohne praktische Bedeutung.
 
 ### 9.4 Warum kein System OFF
 
