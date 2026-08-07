@@ -748,9 +748,10 @@ static void onMotion() { resumeLoop(); }
 ```
 
 Sie tut absichtlich nur eines. I²C-Zugriffe und BLE haben in einer Interrupt-Routine
-nichts verloren — alles Weitere (IMU neu konfigurieren, Funk wieder anschalten,
-Takt neu ausrichten) geschieht in `AirMouseController::onWake()`, sobald die Task nach
-`suspendLoop()` wieder läuft.
+nichts verloren — alles Weitere geschieht erst in der Task, sobald sie nach
+`suspendLoop()` wieder läuft: `AirMouseController::onWake()` konfiguriert die IMU neu,
+schaltet den Funk wieder an und erhöht kurzzeitig das Madgwick-Beta. Die Neuausrichtung
+des Schleifentakts folgt erst danach, in `main.cpp` selbst — siehe Abschnitt 9.3.
 
 ### 9.3 Einschwingen nach dem Aufwachen
 

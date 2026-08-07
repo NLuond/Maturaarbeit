@@ -301,10 +301,11 @@ danach:**
   Im committeten USB-Build sind `radioOff()`/`radioOn()` leere Hüllen
   (`MouseHID.h`) — dort zu messen heisst, eine Funktion zu messen, die es gar
   nicht gibt.
-- **`ovr` schlägt nur bei einem ganzen verpassten Takt aus** (4785 µs).
-  Feinere Verschiebungen durch die gröbere `delay()`-Auflösung bleiben für ihn
-  unsichtbar — „`ovr` bleibt 0" ist für sich allein also kein Beleg dafür,
-  dass die schlafende Schleife den Takt wirklich hält.
+- **`ovr` schlägt nur bei einem ganzen verpassten Takt aus** (in AKTIV 4785 µs, in
+  BEREIT 19230 µs — der blinde Fleck ist dort also viermal so breit, ausgerechnet im
+  Zustand, in dem meistens gemessen wird). Feinere Verschiebungen durch die gröbere
+  `delay()`-Auflösung bleiben für ihn unsichtbar — „`ovr` bleibt 0" ist für sich
+  allein also kein Beleg dafür, dass die schlafende Schleife den Takt wirklich hält.
 - **Enttäuscht die SCHLAF-Zahl, zuerst den Interrupt verdächtigen, nicht die
   IMU-Konfiguration.** `attachInterrupt` läuft über den GPIOTE-Event-Modus,
   der seine Erkennungsschaltung getaktet hält und dadurch messbar mehr
