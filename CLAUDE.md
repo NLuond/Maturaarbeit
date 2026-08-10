@@ -159,24 +159,68 @@ Entscheidungslogik, sondern rechnen nur.
 `apply()` — der einzigen Stelle mit Seiteneffekten — ausfuehrt. Neue Zustandslogik
 gehoert hierhin und braucht einen Test, kein zusaetzliches Flag im Controller.
 
-**Die Haltung waehlt, was ein Pinch bedeutet:** `Point` → Linksklick, `Idle` (nur das
-Waagrecht-Gate, keine Verdrehungs-Bandbreite mehr) → nichts, `Turned` → Rechtsklick bei
-ruhig gehaltener Neigung. Der Pinch selbst ist zustandslos, er veraendert im Automaten
-nichts — auch das ist getestet.
+**Die Haltung waehlt, was ein Pinch bedeutet:** `Point` → linke Taste runter (daraus wird
+Klick oder Ziehen, siehe unten), `Idle` (nur das Waagrecht-Gate, keine Verdrehungs-
+Bandbreite mehr) → nichts, `Turned` → Rechtsklick bei ruhig gehaltener Neigung. Power und
+Pose laesst der Pinch unberuehrt; die einzige Achse, die er bewegt, ist `Grab` — auch das
+ist getestet.
 
 `Idle` ist **keine Zone der Verdrehung**, sondern ausschliesslich das Ergebnis des
-Waagrecht-Gates. Der Scroll-Joystick kommt **nicht** mit der Haltung `Turned`, sondern
+Neigungs-Gates. Der Scroll-Joystick kommt **nicht** mit der Haltung `Turned`, sondern
 erst ueber `onTwistHeld()` nach einer Sekunde gehaltener Ausdrehung — sonst wuerde jede
 Ein/Aus-Geste nebenbei ein Stueck weit scrollen. Beides stand frueher falsch im
 Klassenkommentar von `PoseDetector` und ist jetzt durch `test_pose_detector` festgenagelt.
 
-**Es gibt bewusst keine `Grab`-Achse und kein Ziehen.** Zwei Anlaeufe dazu sind wieder
-ausgebaut worden: der Doppel-Pinch brauchte ein Wartefenster, das auf *jedem* gewoehnlichen
-Klick lag; Pinch-plus-Abdrehen kollidierte mit dem Rechtsklick auf derselben Geste.
-Solange nichts eine Taste gedrueckt haelt, waere ein Zustand dafuer nur Ballast — und die
-Invariante „nie mit gedrueckter Taste abschalten" waere leer. Kommt das Ziehen spaeter
-ueber eine 180-Grad-Drehung zurueck, gehoert dazu wieder eine eigene Achse mit dieser
-Invariante und einem Test dafuer.
+**Die dritte Achse `Grab` (`Off` / `Pending` / `On`) traegt Klick und Ziehen gemeinsam.**
+Es gibt **keinen** `Actions::click` mehr: der Pinch drueckt die Taste sofort
+(`pressLeft`, `Grab::Pending`). Was daraus wird, entscheidet die **Bewegung**:
+
+- Cursor bewegt sich ueber `cfg::DRAG_MOVE_PX` → `onDragMove()`, `Grab::On`, Ziehen
+- Cursor bleibt stehen, `cfg::DRAG_WINDOW_MS` laeuft ab → `onClickWindow()`, Taste hoch,
+  das war ein gewoehnlicher Klick
+- Pinch waehrend `Grab::On` → Taste hoch, fallenlassen
+
+Dasselbe Kriterium trennt auf jedem Touchscreen Tippen von Wischen. Der Druck kommt ohne
+jede Verzoegerung; nur das Loslassen wartet.
+
+**Warum nicht Apples „pinch and move" mit Loslassen als Ende:** ein *gehaltener* Pinch ist
+mit einer IMU grundsaetzlich unsichtbar (Zustand, keine Beschleunigung) — Doublepoint
+verbaut dafuer einen optischen Sensor und liest die Sehnen. Der Loese-*Impuls* waere ein
+Ereignis und damit denkbar; am Geraet gemessen ist er aber nur teilweise vorhanden, bei
+kurzem Pinch gar nicht, und kaum ueber dem Rauschen. Deshalb endet das Ziehen mit einem
+bewussten zweiten Pinch. Ein frueherer Entwurf, der den Doppel-Pinch zum *Starten*
+benutzte, ist daran gescheitert, dass sein Zeitband (200–350 ms) in der Praxis nicht zu
+treffen war.
+
+**Waehrend des Ziehens wird der Pinch allein an der Huellkurve gemessen**
+(`PinchDetector::tick(..., relaxed)`): der Pinch zum Fallenlassen faellt per Definition in
+eine Armbewegung, und der Gyro-Guard verwuerfe ihn sonst genau dann, wenn er gebraucht
+wird.
+
+**Die Vibration kommt sofort beim Pinch**, nicht erst bei der Entscheidung — ein um das
+ganze Fenster verzoegerter Puls fuehlt sich an, als gaebe es gar keinen. Den zweiten Pinch
+kann er nicht vortaeuschen: er dauert 40 ms, gezaehlt wird erst ab `DEBOUNCE_MS`.
+
+Ein Ausloeser ueber einen *tieferen* Scheitelwinkel der Ausdrehung ist erprobt und wieder
+ausgebaut worden: er lag auf derselben Achse wie Ein/Aus, und eine etwas zu weit geratene
+Schaltgeste wurde dadurch stillschweigend zum Ziehen — Ein/Aus verlor messbar an
+Zuverlaessigkeit. Der aeltere Anlauf Pinch-plus-Abdrehen kollidierte mit dem Rechtsklick
+auf derselben Geste.
+
+Der Preis der Achse ist die Invariante **„nie mit gedrueckter Taste abschalten oder die
+Zeige-Haltung verlassen"** — sie gilt fuer `holding()`, nicht nur `dragging()`: auch das
+unentschiedene `Pending` haelt die Taste koerperlich unten. `onPower()` und `onPose()`
+geben sie von sich aus frei, und `AirMouseState::dropGrab()` ist die einzige Stelle, an
+der das geschieht. Dazu kommen im Controller (`runDrag()`) eine Zwangsfreigabe nach
+`cfg::DRAG_MAX_MS` und ein Erinnerungsimpuls alle `cfg::DRAG_REMIND_MS`, damit ein
+laufendes Ziehen nie stillschweigend aktiv ist. Jede laengere Vibration sperrt
+anschliessend kurz die Klickerkennung (`pinch_.holdOff()`) — sonst laese sie die eigene
+Erschuetterung als Pinch.
+
+**Ein/Aus brummt lang** (`Actions::hapticLong`, `cfg::HAPTIC_LONG_MS`), alles andere kurz:
+1 = Klick oder Haltungswechsel, 2 = Rechtsklick, 3 = Ziehen an oder aus. Ein/Aus ist das
+einzige Ereignis, nach dem gar nichts mehr geht, und ein langer Puls hebt sich sauberer ab
+als eine vierte Anzahl kurzer, die ohnehin zu einem Brummen verschmelzen wuerde.
 
 `AirMouseController` verdrahtet nur noch: Ereignisse einsammeln → FSM fragen → `apply()`.
 Ablauf pro Tick:
@@ -184,7 +228,15 @@ Ablauf pro Tick:
 1. `TwistToggle` — die Ein/Aus-Geste ersetzt das fruehere Schuetteln: Unterarm um rund
    90 Grad abdrehen und innerhalb einer Sekunde zurueck schaltet ein oder aus
    (`TwistEvent::Toggle`), laenger gehalten wird daraus der Scroll-Modus
-   (`TwistEvent::Held`). Beim Einschalten setzt `Actions::resetPose` die Haltung auf
+   (`TwistEvent::Held`). Wie weit ausgedreht wird, spielt darueber hinaus keine Rolle —
+   ein tieferer Scheitelwinkel als zweite Bedeutung ist erprobt und wieder ausgebaut.
+   Drei Bremsen koennen die Geste verwerfen, und alle drei taten das frueher **lautlos**:
+   die Abbruchschwelle (`cfg::TWIST_CANCEL_ENV` — eigene, hoehere Schwelle als das
+   Klick-Gate, weil die Drehung selbst die Huellkurve ueber `ENV_ON` hebt), das
+   Waagrecht-Gate (`LEVEL_MAX_DEG`) und das Rueckkehrfenster (`maxMs`). Jede zaehlt
+   inzwischen mit (`nTwCan`, `nTwLvl`, `nTwSlow` im Teleplot) — ohne das ist eine
+   verschluckte Geste von Unzuverlaessigkeit nicht zu unterscheiden.
+   Beim Einschalten setzt `Actions::resetPose` die Haltung auf
    `Point` zurueck — der Nullpunkt der Verdrehung ist dagegen fest
    (`cfg::TWIST_NEUTRAL_DEG`) und wird *nicht* beim Einschalten kalibriert: das geschah
    frueher direkt nach dem Schuetteln, wo die Lageschaetzung am staerksten gestoert war,
@@ -196,11 +248,20 @@ Ablauf pro Tick:
    die Unterarmachse) und `elevDeg` (Neigung des Unterarms aus der Waagerechten). Der
    Controller rechnet sie einmal pro Tick und verteilt sie — kein Modul holt sich seinen
    Winkel mehr selbst.
-3. `PoseDetector` — das **Waagrecht-Gate** (`LEVEL_MAX_DEG`, Hysterese `LEVEL_HYST_DEG`)
-   entscheidet zuerst: ausserhalb gibt es nur `Idle`, egal wie die Hand steht. Erst
-   innerhalb des Gates waehlt die geglaettete Verdrehung gegen `TWIST_NEUTRAL_DEG`
-   zwischen `Point` und `Turned` — `Idle` ist also keine Zone der Verdrehung mehr,
-   sondern allein das Ergebnis des Gates. Geglaettet (`MODE_TAU`) + Haltezeit
+3. `PoseDetector` — ein **Neigungs-Gate** entscheidet zuerst: ausserhalb gibt es nur
+   `Idle`, egal wie die Hand steht. Erst innerhalb des Gates waehlt die geglaettete
+   Verdrehung gegen `TWIST_NEUTRAL_DEG` zwischen `Point` und `Turned` — `Idle` ist also
+   keine Zone der Verdrehung mehr, sondern allein das Ergebnis des Gates.
+   Es gibt **zwei** Gates mit verschiedenen Aufgaben: das enge, symmetrische
+   `LEVEL_MAX_DEG` (`level()`) ist Voraussetzung der Ein/Aus-Drehgeste, das weite und
+   asymmetrische `POSE_UP_MAX_DEG`/`POSE_DOWN_MAX_DEG` (`poseGate()`) entscheidet ueber
+   `Idle` — nach oben zeigt und scrollt man, nach unten haengt der Arm im Ruhezustand.
+   Massgeblich ist die Beobachtbarkeit der Verdrehung, `sqrt(ux²+uz²) = cos(elev)`; bei
+   35 Grad stehen davon noch 82 Prozent zur Verfuegung.
+   Laeuft der Scroll-Modus (`holdTurned`, aus `fsm_.scrolling()`), gilt das weite Gate
+   **gar nicht**: Scrollen heisst den Arm neigen, und mit Gate beendete das Scrollen sich
+   selbst. Der einzige Weg heraus ist das Zurueckdrehen, auch bei erhobener Hand. Nur
+   jenseits von `POSE_HOLD_MAX_DEG` bleibt die Haltung stehen. Geglaettet (`MODE_TAU`) + Haltezeit
    (`MODE_DWELL_MS`) + Hysterese (auch auf dem Gate), sonst springt die Haltung mitten in
    einer schnellen Bewegung um. Zusaetzlich wird waehrend heftiger Bewegung
    (`POSE_STILL_DPS`, plus `POSE_CALM_MS` Ruhezeit danach) gar nicht erst entschieden —
@@ -217,6 +278,10 @@ Ablauf pro Tick:
    `PinchDetector::tick()` bekommt den Klassifikator als Callable uebergeben und ruft
    ihn per Kurzschlussauswertung nur bei offenem Gate — deshalb kennt die Policy das
    EI-SDK nicht und die Inferenz laeuft nicht in jedem Takt.
+   Nach einem **Rechtsklick** sperrt der Controller zusaetzlich
+   (`pinch_.holdOff()`, `RIGHT_CLICK_HOLDOFF_MS`): der Impuls beim Loesen des Pinch
+   schloesse sonst das eben geoeffnete Kontextmenue wieder. Der Rechtsklick bleibt ein
+   ganzer Klick und nimmt am Doppel-Pinch nicht teil.
 5. `OrientationPointer` — `arm::rates()` zerlegt die Drehrate in Gieren und Nicken
    *bezogen auf den Raum* (Roll-Kompensation, `USE_ROLL_COMP`) → Deadzone → 1-Euro-Filter
    → Beschleunigung → Pixel; im Controller akkumuliert und alle `MOVE_INTERVAL_US` als

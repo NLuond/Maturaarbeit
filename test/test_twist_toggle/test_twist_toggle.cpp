@@ -150,6 +150,50 @@ static void test_signDoesNotMatter() {
           "negative Verdrehung schaltet nicht");
 }
 
+// Eine sehr weite Ausdrehung ist dieselbe Geste wie eine knappe. Ein tieferer
+// Scheitelwinkel hat hier einmal das Ziehen getragen; das lag auf derselben
+// Achse wie Ein/Aus, und eine etwas zu weit geratene Schaltgeste wurde
+// dadurch stillschweigend zum Ziehen. Diese Pruefung haelt fest, dass die
+// Achse wieder nur eine Bedeutung hat.
+static void test_veryDeepIsStillJustAToggle() {
+    TwistToggle t;
+    uint32_t now = 1000;
+    hold(t, 0.f,   true, now, 200);
+    hold(t, 170.f, true, now, 300);
+    CHECK(hold(t, 0.f, true, now, 100) == TwistEvent::Toggle,
+          "eine sehr weite Ausdrehung schaltet nicht mehr ein oder aus");
+}
+
+// Jede der drei Bremsen verwirft die Geste lautlos. Ohne Zaehler ist das von
+// Unzuverlaessigkeit nicht zu unterscheiden - genau daran hing die Fehlersuche.
+static void test_rejectionsAreCounted() {
+    TwistToggle a;
+    uint32_t now = 1000;
+    hold(a, 0.f,  true, now, 200);
+    hold(a, 90.f, true, now, 300);
+    a.cancel();
+    hold(a, 0.f,  true, now, 200);
+    CHECK(a.rejectedByCancel() == 1, "die abgebrochene Ausdrehung wird nicht gezaehlt");
+    CHECK(a.rejectedByLevel() == 0 && a.rejectedByTime() == 0,
+          "die Ablehnung wird dem falschen Zaehler angelastet");
+
+    TwistToggle b;
+    now = 1000;
+    hold(b, 0.f,  true,  now, 200);
+    hold(b, 90.f, true,  now, 200);
+    hold(b, 90.f, false, now, 100);
+    CHECK(b.rejectedByLevel() == 1, "das gerissene Waagrecht-Gate wird nicht gezaehlt");
+
+    TwistToggle c;
+    now = 1000;
+    hold(c, 0.f,  true, now, 200);
+    hold(c, 90.f, true, now, 200);
+    CHECK(c.rejectedByTime() == 0, "zu frueh als verspaetet gezaehlt");
+    hold(c, 90.f, true, now, 2000);          // ueber maxMs: erst Held
+    hold(c, 0.f,  true, now, 200);
+    CHECK(c.rejectedByCancel() == 0, "Held wird als Abbruch gezaehlt");
+}
+
 int main() {
     test_quickOutAndBackToggles();
     test_slowReturnDoesNotToggle();
@@ -162,6 +206,8 @@ int main() {
     test_toggleWorksAgainAfterLockout();
     test_afterHeldNoToggle();
     test_signDoesNotMatter();
+    test_veryDeepIsStillJustAToggle();
+    test_rejectionsAreCounted();
 
     std::printf("%d Pruefungen, %d Fehler\n", checks, failures);
     return failures ? 1 : 0;

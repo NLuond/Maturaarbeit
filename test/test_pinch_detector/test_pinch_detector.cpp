@@ -131,6 +131,91 @@ static void test_debounceTakesPrecedenceOverGyro() {
           "bei beiden Gruenden zaehlt nicht die Entprellung zuerst");
 }
 
+// --- Die Sperre nach dem Rechtsklick ----------------------------------
+
+// Der Controller sperrt nach einem Rechtsklick laenger als die Entprellung:
+// Haptik und Loese-Impuls des Fingers erzeugten sonst eine zweite Flanke, die
+// das eben geoeffnete Kontextmenue wieder schloss.
+static void test_holdOffOutlastsDebounce() {
+    PinchDetector d;
+    MlStub ml;
+    CHECK(d.tick(kT.envOn + 0.01f, 0.f, 1000, ml), "der erste Pinch feuert nicht");
+    d.holdOff(1000, 700);
+
+    d.tick(0.f, 0.f, 1010, ml);                       // Gate zu, Flanke frei
+    CHECK(!d.tick(kT.envOn + 0.01f, 0.f, 1000 + kT.debounceMs + 20, ml),
+          "die Sperre endet schon mit der Entprellung");
+    CHECK(d.blockedByDebounce() == 1, "die gesperrte Flanke wird nicht gezaehlt");
+
+    d.tick(0.f, 0.f, 1650, ml);
+    CHECK(d.tick(kT.envOn + 0.01f, 0.f, 1701, ml),
+          "nach Ablauf der Sperre feuert es nicht wieder");
+}
+
+// tLastPinch_ bleibt unberuehrt: die Sperre verlaengert das Fenster, sie
+// verschiebt es nicht. Sonst zoege jede Sperre die Entprellung mit sich.
+static void test_holdOffDoesNotRestartDebounce() {
+    PinchDetector d;
+    MlStub ml;
+    d.tick(kT.envOn + 0.01f, 0.f, 1000, ml);
+    d.holdOff(1000, 300);
+    d.tick(0.f, 0.f, 1010, ml);
+
+    CHECK(d.tick(kT.envOn + 0.01f, 0.f, 1301, ml),
+          "nach Ablauf der Sperre wirkt die Entprellung noch einmal von vorne");
+}
+
+// Haelt die Erschuetterung ueber die ganze Sperre an, bleibt wasHot_ wahr - es
+// darf danach nicht nachzuenden, sondern erst bei der naechsten echten Flanke.
+static void test_noReignitionAfterHoldOff() {
+    PinchDetector d;
+    MlStub ml;
+    d.tick(kT.envOn + 0.01f, 0.f, 1000, ml);
+    d.holdOff(1000, 300);
+    for (uint32_t t = 1005; t <= 1400; t += 5) {
+        CHECK(!d.tick(kT.envOn + 0.01f, 0.f, t, ml),
+              "eine anhaltende Erschuetterung zuendet nach der Sperre nach");
+    }
+}
+
+// --- Der zweite Pinch im offenen Fenster -------------------------------
+
+// Im Fenster des Doppel-Pinch zaehlt allein die Huellkurve. Beide Bremsen
+// stehen dem zweiten Pinch systematisch im Weg: der Guard, weil die Hand vom
+// ersten noch in Bewegung ist, und das Modell, weil sein Fenster den Schwanz
+// des ersten Pinch enthaelt.
+static void test_relaxedIgnoresGyroGuard() {
+    PinchDetector d;
+    MlStub ml;
+    const float loud = kT.gyroGuardDps + 150.f;
+    CHECK(!d.tick(kT.envOn + 0.01f, loud, 1000, ml), "der Guard greift ohne relaxed nicht");
+
+    PinchDetector e;
+    CHECK(e.tick(kT.envOn + 0.01f, loud, 1000, ml, true),
+          "der Gyro-Guard blockt den zweiten Pinch trotz offenem Fenster");
+    CHECK(e.blockedByGyro() == 0, "der geblockte Zaehler laeuft trotz relaxed hoch");
+}
+
+static void test_relaxedSkipsTheModel() {
+    PinchDetector d;
+    MlStub ml;
+    ml.answer = false;                                  // Modell lehnt ab
+    CHECK(d.tick(kT.envOn + 0.01f, 0.f, 1000, ml, true),
+          "das ablehnende Modell blockt den zweiten Pinch");
+    CHECK(ml.calls == 0, "das Modell wird trotz relaxed befragt");
+}
+
+// Die Entprellung bleibt: sie ist der untere Rand des Fensters und sperrt den
+// Loese-Impuls des ersten Pinch aus.
+static void test_relaxedStillRespectsDebounce() {
+    PinchDetector d;
+    MlStub ml;
+    d.tick(kT.envOn + 0.01f, 0.f, 1000, ml);
+    d.tick(0.f, 0.f, 1010, ml);
+    CHECK(!d.tick(kT.envOn + 0.01f, 0.f, 1000 + kT.debounceMs - 20, ml, true),
+          "relaxed hebelt die Entprellung aus");
+}
+
 // --- Das Einfrieren des Cursors ---------------------------------------
 
 static void test_freezeFollowsTheGateNotAFixedTime() {
@@ -156,6 +241,12 @@ int main() {
     test_debounceBlocksAndCounts();
     test_gyroGuardBlocksAndCounts();
     test_debounceTakesPrecedenceOverGyro();
+    test_holdOffOutlastsDebounce();
+    test_holdOffDoesNotRestartDebounce();
+    test_noReignitionAfterHoldOff();
+    test_relaxedIgnoresGyroGuard();
+    test_relaxedSkipsTheModel();
+    test_relaxedStillRespectsDebounce();
     test_freezeFollowsTheGateNotAFixedTime();
 
     std::printf("%d Pruefungen, %d Fehler\n", checks, failures);

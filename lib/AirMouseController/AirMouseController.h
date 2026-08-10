@@ -38,12 +38,20 @@ static_assert(kTwistDefaults.onDeg == cfg::TURN_ON_DEG,
 static_assert(kTwistDefaults.backDeg < cfg::TURN_OFF_DEG &&
               cfg::TURN_OFF_DEG < cfg::TURN_ON_DEG,
               "Reihenfolge backDeg < TURN_OFF_DEG < TURN_ON_DEG verletzt");
+// Der Zeiger ruht, solange die Erschuetterung anliegt. Waere das Fenster
+// kuerzer, liefe es ab, bevor der Cursor sich ueberhaupt bewegen darf, und ein
+// Ziehen kaeme nie zustande.
+static_assert(cfg::DRAG_WINDOW_MS > cfg::FREEZE_MAX_MS,
+              "Das Fenster endet, bevor der Zeiger nach dem Pinch wieder freigegeben ist");
 
 static_assert(kPoseDefaults.twistNeutralDeg == cfg::TWIST_NEUTRAL_DEG &&
               kPoseDefaults.turnOnDeg       == cfg::TURN_ON_DEG       &&
               kPoseDefaults.turnOffDeg      == cfg::TURN_OFF_DEG      &&
               kPoseDefaults.levelMaxDeg     == cfg::LEVEL_MAX_DEG     &&
               kPoseDefaults.levelHystDeg    == cfg::LEVEL_HYST_DEG    &&
+              kPoseDefaults.poseUpMaxDeg    == cfg::POSE_UP_MAX_DEG   &&
+              kPoseDefaults.poseDownMaxDeg  == cfg::POSE_DOWN_MAX_DEG &&
+              kPoseDefaults.poseHoldMaxDeg  == cfg::POSE_HOLD_MAX_DEG &&
               kPoseDefaults.modeTau         == cfg::MODE_TAU          &&
               kPoseDefaults.rollCompTau     == cfg::ROLLCOMP_TAU      &&
               kPoseDefaults.dwellMs         == cfg::MODE_DWELL_MS     &&
@@ -88,8 +96,11 @@ public:
         battery_.update(now_ms);
 
         const float env = envelope_.update(s.accMag, dt);
+        trackEnvPeak(env);
         updateAngles(s, dt);
-        pose_.update(twist_, elev_, s.gyroSum, dt, now_ms);
+        // scrolling() stammt aus dem Vortakt - onPose() laeuft erst danach. Bei
+        // 209 Hz ist der eine Takt Verzug ohne Belang.
+        pose_.update(twist_, elev_, s.gyroSum, dt, now_ms, fsm_.scrolling());
 
         handleTwistGesture(env, now_ms);
 
@@ -103,6 +114,7 @@ public:
 
         runPointer(s, dt, now_us, now_ms);
         runScroll(dt, now_ms);
+        runDrag(now_ms);
 
         debug(s, env, now_us);
         handleSleep(s.gyroSum, now_ms);
@@ -150,8 +162,11 @@ private:
     float    twist_ = 0.f, elev_ = 0.f;
     float    twistGain_ = 1.f;
     float    accumX_ = 0.f, accumY_ = 0.f;
+    float    dragPx_ = 0.f;      // Weg seit dem Pinch, entscheidet Klick gegen Ziehen
     uint32_t tMove_ = 0, tDbg_ = 0;
+    uint32_t tPress_ = 0, tGrab_ = 0, tRemind_ = 0;
     uint16_t nMoveFail_ = 0;
+    uint16_t nClick_ = 0;
     bool     imuRateActive_ = false;   // Startzustand ausgeschaltet, also BEREIT
 
     // --- Lage -----------------------------------------------------------
@@ -173,7 +188,10 @@ private:
         // Eine Erschuetterung verbraucht die laufende Ausdrehung - sie war ein
         // Pinch, keine Schaltgeste. An der Schwelle und nicht am erkannten
         // Klick, damit ein vom Modell verpasster Pinch die Maus nicht abschaltet.
-        if (fsm_.on() && env > cfg::ENV_ON) twistToggle_.cancel();
+        //
+        // Eigene, hoehere Schwelle als das Klick-Gate: die Drehung selbst hebt
+        // die Huellkurve ueber ENV_ON und brach die Geste sonst lautlos ab.
+        if (fsm_.on() && env > cfg::TWIST_CANCEL_ENV) twistToggle_.cancel();
 
         // settling(): nach dem Aufwachen ist der Winkel noch nicht verlaesslich.
         const bool levelOk = pose_.level() && !sleep_.settling();
@@ -187,8 +205,12 @@ private:
     void handlePinch(const ImuSample& s, float env, uint32_t now_ms) {
         ml_.push(s, env);
 
+        // Waehrend des Ziehens zaehlt allein die Huellkurve: der Pinch zum
+        // Fallenlassen faellt per Definition in eine Armbewegung, und der
+        // Gyro-Guard verwirft ihn sonst genau dann, wenn er gebraucht wird.
         const bool pinched = pinch_.tick(env, s.gyroSum, now_ms,
-                                         [this] { return ml_.ready() && ml_.isPinch(); });
+                                         [this] { return ml_.ready() && ml_.isPinch(); },
+                                         fsm_.dragging());
         if (!pinched) return;
 
         // TwistToggle sieht den Arm koerperlich frueher als draussen als die
@@ -200,13 +222,29 @@ private:
 
     // Die einzige Stelle, an der Aktionen des Automaten Wirkung entfalten.
     void apply(const Actions& a, uint32_t now_ms) {
-        if (a.click)      { mouse_.click();      clickPulse_ = true; }
-        if (a.rightClick) { mouse_.rightClick(); clickPulse_ = true; }
+        if (a.rightClick) {
+            mouse_.rightClick();
+            // Ohne die Sperre schliesst der Loese-Impuls des Fingers das eben
+            // geoeffnete Kontextmenue sofort wieder.
+            pinch_.holdOff(now_ms, cfg::RIGHT_CLICK_HOLDOFF_MS);
+            clickPulse_ = true;
+            nClick_++;
+        }
+
+        if (a.pressLeft)   { mouse_.pressLeft(); tPress_ = tGrab_ = tRemind_ = now_ms;
+                             dragPx_ = 0.f; }
+        if (a.releaseLeft) { mouse_.releaseAll(); clickPulse_ = true; nClick_++; }
 
         if (a.resetPose)     pose_.reset();
         if (a.enterScroll)   scroll_.enter(elev_);
         if (a.resetPointer) { accumX_ = accumY_ = 0.f; pointer_.reset(); twistGuard_.reset(); }
-        if (a.hapticPulses)  haptic_.trigger(now_ms, a.hapticPulses);
+        if (a.hapticPulses) {
+            const uint32_t ms = a.hapticLong ? cfg::HAPTIC_LONG_MS : cfg::HAPTIC_MS;
+            haptic_.trigger(now_ms, a.hapticPulses, ms);
+            // Der lange Puls dauert laenger als die Entprellung - ohne die
+            // Sperre laese die Klickerkennung ihn als Pinch.
+            if (a.hapticLong) pinch_.holdOff(now_ms, ms + cfg::DRAG_REMIND_BLIND_MS);
+        }
 
         syncImuRate();
     }
@@ -224,6 +262,11 @@ private:
         // waehrend einer Drehung eingeschwungen bleibt.
         accumX_ += px * twistGain_;
         accumY_ += py * twistGain_;
+
+        // Weg seit dem Pinch, als Summe der Betraege: es geht um "hat sich der
+        // Cursor bewegt", nicht um die Verschiebung - ein Hin und Her waere
+        // sonst null, obwohl die Hand deutlich gezogen hat.
+        dragPx_ += fabsf(px * twistGain_) + fabsf(py * twistGain_);
 
         if (now_us - tMove_ < cfg::MOVE_INTERVAL_US) return;
         tMove_ = now_us;
@@ -257,6 +300,31 @@ private:
         if (!fsm_.scrolling()) return;
         const int8_t ticks = scroll_.update(elev_, dt, now_ms);
         if (ticks) mouse_.scroll(ticks);
+    }
+
+    // Das Fenster fuer den zweiten Pinch und die beiden Sicherungen des
+    // Ziehens. Der Automat kennt keine Zeit, deshalb stehen sie hier.
+    void runDrag(uint32_t now_ms) {
+        // Die Entscheidung Klick oder Ziehen. Bewegung gewinnt: erst wenn sie
+        // ausbleibt, laeuft das Fenster ueberhaupt ab.
+        if (fsm_.holding() && !fsm_.dragging()) {
+            if (dragPx_ >= cfg::DRAG_MOVE_PX)                 apply(fsm_.onDragMove(),    now_ms);
+            else if (now_ms - tPress_ >= cfg::DRAG_WINDOW_MS) apply(fsm_.onClickWindow(), now_ms);
+            return;
+        }
+        if (!fsm_.dragging()) return;
+
+        if (now_ms - tGrab_ >= cfg::DRAG_MAX_MS) {
+            apply(fsm_.onDragRelease(), now_ms);
+            return;
+        }
+
+        if (now_ms - tRemind_ < cfg::DRAG_REMIND_MS) return;
+        tRemind_ = now_ms;
+        haptic_.trigger(now_ms, 1);
+        // Sonst laese die Klickerkennung die eigene Vibration als Pinch und
+        // beendete das Ziehen, an das sie gerade erinnert.
+        pinch_.holdOff(now_ms, cfg::DRAG_REMIND_BLIND_MS);
     }
 
     // --- Betriebszustaende ----------------------------------------------
@@ -295,6 +363,14 @@ private:
     LowPass lpX_{cfg::GRAVITY_LP_HZ}, lpY_{cfg::GRAVITY_LP_HZ}, lpZ_{cfg::GRAVITY_LP_HZ};
     float   gvx_ = 0.f, gvy_ = 0.f, gvz_ = 1.f;
 
+    // Groesster env-Wert seit der letzten Ausgabe. Die Schleife laeuft mit
+    // 209 Hz, die Ausgabe mit 50 Hz - ein Impuls der Huellkurve (Zeitkonstante
+    // rund 10 ms) waere daran nur zufaellig auf seinem Scheitel getroffen, und
+    // die abgelesene Amplitude systematisch zu klein. Der Spitzenwertspeicher
+    // laeuft im vollen Takt mit und kann deshalb keinen Impuls verpassen.
+    float   envPeak_ = 0.f;
+    void trackEnvPeak(float env) { if (env > envPeak_) envPeak_ = env; }
+
     // Muss in jedem Takt laufen, nicht erst im gedrosselten debug(): ein
     // Tiefpass, der nur jedes n-te Sample sieht, hat eine andere Zeitkonstante.
     void updateGravityEstimate(const ImuSample& s, float dt) {
@@ -310,6 +386,7 @@ private:
     }
 #else
     void updateGravityEstimate(const ImuSample&, float) {}
+    void trackEnvPeak(float) {}
 #endif
 
     // Eine Zeile ">name:wert" pro Kanal.
@@ -326,6 +403,16 @@ private:
         Serial.print(">pose:");   Serial.println((int)fsm_.pose());
         Serial.print(">dpose:");  Serial.println((int)pose_.pose());
         Serial.print(">tw:");     Serial.println(twistToggle_.state());
+        Serial.print(">drag:");   Serial.println(fsm_.dragging() ? 1 : 0);
+        Serial.print(">nClick:"); Serial.println(nClick_);
+
+        // Warum eine Ausdrehung nicht geschaltet hat. Alle drei scheitern sonst
+        // lautlos und sehen wie Unzuverlaessigkeit aus.
+        // nTwCan: Erschuetterung ueber TWIST_CANCEL_ENV waehrend der Drehung.
+        // nTwLvl: Arm ausserhalb von LEVEL_MAX_DEG.  nTwSlow: zu spaet zurueck.
+        Serial.print(">nTwCan:");  Serial.println(twistToggle_.rejectedByCancel());
+        Serial.print(">nTwLvl:");  Serial.println(twistToggle_.rejectedByLevel());
+        Serial.print(">nTwSlow:"); Serial.println(twistToggle_.rejectedByTime());
         Serial.print(">vbat:");   Serial.println(battery_.volts(), 3);
 
     #if DEBUG_SET == DEBUG_ALL || DEBUG_SET == DEBUG_PINCH
@@ -334,7 +421,11 @@ private:
         Serial.print(">env:");    Serial.println(env, 4);
         Serial.print(">gate:");   Serial.println(pinch_.envGate() ? 1 : 0);
         Serial.print(">p_ml:");   Serial.println(ml_.score(), 3);
+        // click latcht bis zur naechsten Ausgabe - zwei Klicks im selben
+        // Intervall waeren daran nicht zu unterscheiden. Dafuer gibt es nClick,
+        // und der steht in der immer gesendeten Gruppe.
         Serial.print(">click:");  Serial.println(clickPulse_ ? 1 : 0);
+        Serial.print(">envMax:"); Serial.println(envPeak_, 4);
         Serial.print(">gsum:");   Serial.println(s.gyroSum, 1);
         Serial.print(">nDeb:");   Serial.println(pinch_.blockedByDebounce());
         Serial.print(">nGyro:");  Serial.println(pinch_.blockedByGyro());
@@ -357,9 +448,22 @@ private:
         Serial.print(">elev:");   Serial.println(elev_, 1);
         Serial.print(">rtwist:"); Serial.println(pose_.relTwistDeg(), 1);
         Serial.print(">level:");  Serial.println(pose_.level() ? 1 : 0);
+        Serial.print(">pgate:");  Serial.println(pose_.poseGate() ? 1 : 0);
         Serial.print(">srate:");  Serial.println(scroll_.rateHz(), 2);
         Serial.print(">tg:");     Serial.println(twistGain_, 2);
         Serial.print(">tgr:");    Serial.println(twistGuard_.rateDps(), 1);
+    #endif
+
+    // Nicht Teil von DEBUG_ALL: teilt env/gate/click mit DEBUG_PINCH.
+    //
+    // Der schlanke Satz fuer die Messung des Loese-Impulses. Nur fuenf Kanaele,
+    // damit die Serial-Last die Schleife nicht bremst - eine gedehnte Schleife
+    // dehnt genau die Huellkurve, die hier gemessen wird.
+    #if DEBUG_SET == DEBUG_ENV
+        Serial.print(">env:");    Serial.println(env, 4);
+        Serial.print(">envMax:"); Serial.println(envPeak_, 4);
+        Serial.print(">gate:");   Serial.println(pinch_.envGate() ? 1 : 0);
+        Serial.print(">click:");  Serial.println(clickPulse_ ? 1 : 0);
     #endif
 
     // Nicht Teil von DEBUG_ALL: teilt gx/gy/gz mit DEBUG_POINT.
@@ -385,9 +489,11 @@ private:
         Serial.print(">elev:");   Serial.println(elev_, 1);
         Serial.print(">rtwist:"); Serial.println(pose_.relTwistDeg(), 1);
         Serial.print(">level:");  Serial.println(pose_.level() ? 1 : 0);
+        Serial.print(">pgate:");  Serial.println(pose_.poseGate() ? 1 : 0);
     #endif
 
         clickPulse_ = false;
+        envPeak_    = 0.f;   // erst NACH allen Gruppen, sie lesen ihn alle
     #else
         (void)s; (void)env; (void)now_us;
     #endif

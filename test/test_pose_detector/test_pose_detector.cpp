@@ -30,13 +30,15 @@ static const uint32_t kMs = 5;        // dieselbe Zeit in ms
 // ueberschritten. Deshalb wird hier mit der koerperlich echten Auslenkung
 // gearbeitet und nicht mit der Schwelle selbst.
 static const float kTurned = 90.f;
-static const float kSteep  = 60.f;    // deutlich ausserhalb des Waagrecht-Gates
+static const float kSteep  = 60.f;    // ausserhalb des engen Gates (50), innerhalb des weiten (65)
+static const float kUp     = 75.f;    // auch ausserhalb des weiten Gates, nach oben
+static const float kDown   = -50.f;   // ausserhalb des weiten Gates, nach unten
 
 static Pose run(PoseDetector& p, float twist, float elev, float gyro,
-                uint32_t& now, uint32_t ms) {
+                uint32_t& now, uint32_t ms, bool holdTurned = false) {
     Pose last = p.pose();
     for (uint32_t i = 0; i < ms; i += kMs) {
-        last = p.update(twist, elev, gyro, kDt, now);
+        last = p.update(twist, elev, gyro, kDt, now, holdTurned);
         now += kMs;
     }
     return last;
@@ -57,45 +59,114 @@ static void test_staysPointWhenHeldStraightAndLevel() {
           "die Zeige-Haltung haelt bei ruhiger, gerader Hand nicht");
 }
 
-// --- Das Waagrecht-Gate -------------------------------------------------
+// --- Das Neigungs-Gate der Haltung --------------------------------------
 
 // Idle ist ausschliesslich das Ergebnis des Gates. Genau das war der Fehler in
 // der alten Beschreibung: Idle war einmal auch eine Zone der Verdrehung.
 static void test_gateForcesIdle() {
     PoseDetector p;
     uint32_t now = 1000;
-    CHECK(run(p, 0.f, kSteep, 0.f, now, 2000) == Pose::Idle,
-          "ein angehobener Arm liefert nicht Idle");
-    CHECK(!p.level(), "level() meldet den angehobenen Arm nicht");
+    CHECK(run(p, 0.f, kUp, 0.f, now, 2000) == Pose::Idle,
+          "ein steil angehobener Arm liefert nicht Idle");
+    CHECK(!p.poseGate(), "poseGate() meldet den angehobenen Arm nicht");
 
-    CHECK(run(p, 0.f, -kSteep, 0.f, now, 2000) == Pose::Idle,
-          "ein haengender Arm liefert nicht Idle - das Gate rechnet mit Vorzeichen");
+    CHECK(run(p, 0.f, kDown, 0.f, now, 2000) == Pose::Idle,
+          "ein haengender Arm liefert nicht Idle");
 }
 
-// Das Gate hat Vorrang. Abgedreht UND nicht waagrecht ist Idle, nicht Turned -
-// sonst wuerde ein haengender Arm den Rechtsklick tragen, und die Verdrehung
-// ist bei senkrechtem Unterarm ohnehin nicht beobachtbar.
+// Das Gate ist nach oben weiter als nach unten: dorthin zeigt und scrollt man,
+// nach unten haengt der Arm im Ruhezustand. Bei 60 Grad ist die Verdrehung aus
+// der Schwerkraft noch zu sehen (cos 60 = 0.5).
+static void test_gateIsAsymmetric() {
+    PoseDetector p;
+    uint32_t now = 1000;
+    CHECK(run(p, 0.f, kSteep, 0.f, now, 2000) == Pose::Point,
+          "die erhobene Hand faellt aus der Zeige-Haltung");
+    CHECK(!p.level(), "das enge Gate der Geste steht bei 60 Grad noch offen");
+
+    CHECK(run(p, 0.f, -kSteep, 0.f, now, 2000) == Pose::Idle,
+          "der haengende Arm bleibt in der Zeige-Haltung");
+}
+
+// Das Gate hat Vorrang. Abgedreht UND zu steil ist Idle, nicht Turned - sonst
+// wuerde ein haengender Arm den Rechtsklick tragen, und die Verdrehung ist bei
+// senkrechtem Unterarm ohnehin nicht beobachtbar.
 static void test_gateBeatsTwist() {
     PoseDetector p;
     uint32_t now = 1000;
-    CHECK(run(p, kTurned, kSteep, 0.f, now, 2000) == Pose::Idle,
-          "abgedreht bei nicht waagrechtem Arm liefert nicht Idle");
+    CHECK(run(p, kTurned, kUp, 0.f, now, 2000) == Pose::Idle,
+          "abgedreht bei zu steilem Arm liefert nicht Idle");
 }
 
 static void test_gateHasHysteresis() {
     PoseDetector p;
     uint32_t now = 1000;
-    run(p, 0.f, kSteep, 0.f, now, 2000);            // Gate offen -> zu
-    CHECK(!p.level(), "das Gate hat gar nicht erst geschlossen");
+    run(p, 0.f, kUp, 0.f, now, 2000);               // Gate offen -> zu
+    CHECK(!p.poseGate(), "das Gate hat gar nicht erst geschlossen");
 
-    // Zwischen levelMaxDeg - levelHystDeg (27) und levelMaxDeg (35) darf sich
+    // Zwischen poseUpMaxDeg - levelHystDeg (57) und poseUpMaxDeg (65) darf sich
     // nichts ruehren: das ist das Hysteresefenster.
-    const float inBand = kT.levelMaxDeg - 0.5f * kT.levelHystDeg;
+    const float inBand = kT.poseUpMaxDeg - 0.5f * kT.levelHystDeg;
     run(p, 0.f, inBand, 0.f, now, 2000);
-    CHECK(!p.level(), "das Gate oeffnet schon im Hysteresefenster");
+    CHECK(!p.poseGate(), "das Gate oeffnet schon im Hysteresefenster");
 
     run(p, 0.f, 0.f, 0.f, now, 2000);
-    CHECK(p.level(), "das Gate oeffnet nach der Rueckkehr in die Waagerechte nicht");
+    CHECK(p.poseGate(), "das Gate oeffnet nach der Rueckkehr in die Waagerechte nicht");
+}
+
+// Das enge Gate gehoert der Ein/Aus-Drehgeste und bleibt davon unberuehrt:
+// geschaltet wird nur bei waagrechtem Arm, wo der Winkel am verlaesslichsten ist.
+static void test_gestureGateStaysNarrow() {
+    PoseDetector p;
+    uint32_t now = 1000;
+    run(p, 0.f, kSteep, 0.f, now, 2000);
+    CHECK(!p.level(), "das enge Gate der Geste ist mit dem weiten mitgewandert");
+    CHECK(p.poseGate(), "das weite Gate schliesst schon bei 60 Grad");
+
+    const float inBand = kT.levelMaxDeg - 0.5f * kT.levelHystDeg;
+    run(p, 0.f, inBand, 0.f, now, 2000);
+    CHECK(!p.level(), "das enge Gate oeffnet schon in seinem Hysteresefenster");
+
+    run(p, 0.f, 0.f, 0.f, now, 2000);
+    CHECK(p.level(), "das enge Gate oeffnet in der Waagerechten nicht");
+}
+
+// --- Der laufende Scroll-Modus ------------------------------------------
+
+// Scrollen HEISST den Arm neigen. Griffe das Gate hier, beendete das Scrollen
+// sich selbst: Idle verlaesst Turned, und damit loescht die FSM scrollOn_.
+static void test_scrollHoldIgnoresTheGate() {
+    PoseDetector p;
+    uint32_t now = 1000;
+    CHECK(run(p, kTurned, 0.f, 0.f, now, 2000, true) == Pose::Turned,
+          "die abgedrehte Haltung wird im Scroll-Modus nicht erreicht");
+    CHECK(run(p, kTurned, kUp, 0.f, now, 3000, true) == Pose::Turned,
+          "das Neigen beendet den Scroll-Modus");
+}
+
+// Der einzige Weg heraus ist das Zurueckdrehen - und der muss auch bei
+// erhobener Hand funktionieren, ohne den Arm erst senken zu muessen.
+static void test_scrollHoldEndsOnUntwist() {
+    PoseDetector p;
+    uint32_t now = 1000;
+    run(p, kTurned, 50.f, 0.f, now, 2000, true);
+    CHECK(p.pose() == Pose::Turned, "gar nicht erst abgedreht");
+    CHECK(run(p, 0.f, 50.f, 0.f, now, 2000, true) == Pose::Point,
+          "das Zurueckdrehen bei erhobener Hand fuehrt nicht in die Zeige-Haltung");
+}
+
+// Jenseits von poseHoldMaxDeg steht der Unterarm fast senkrecht, die Verdrehung
+// ist aus der Schwerkraft nicht mehr zu sehen. Dort bleibt die Haltung stehen,
+// statt auf einem Rauschwert umzuspringen.
+static void test_scrollHoldFreezesWhenTooSteep() {
+    PoseDetector p;
+    uint32_t now = 1000;
+    run(p, kTurned, 50.f, 0.f, now, 2000, true);
+    run(p, kTurned, 85.f, 0.f, now, 2000, true);
+    CHECK(p.pose() == Pose::Turned, "der Weg in die steile Haltung wechselt schon");
+
+    CHECK(run(p, 0.f, 85.f, 0.f, now, 2000, true) == Pose::Turned,
+          "bei nicht beobachtbarer Verdrehung wird trotzdem entschieden");
 }
 
 // --- Die Verdrehachse ---------------------------------------------------
@@ -252,8 +323,13 @@ int main() {
     test_startsInPoint();
     test_staysPointWhenHeldStraightAndLevel();
     test_gateForcesIdle();
+    test_gateIsAsymmetric();
     test_gateBeatsTwist();
     test_gateHasHysteresis();
+    test_gestureGateStaysNarrow();
+    test_scrollHoldIgnoresTheGate();
+    test_scrollHoldEndsOnUntwist();
+    test_scrollHoldFreezesWhenTooSteep();
     test_twistSelectsTurned();
     test_twistUsesMagnitude();
     test_twistHasHysteresis();

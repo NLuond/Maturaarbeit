@@ -6,10 +6,15 @@
 // Bildet Verdrehung und Armneigung auf eine Haltung ab:
 //
 //   Point  - Hand gerade gehalten.
-//   Idle   - Arm nicht waagrecht. Ergebnis allein des Waagrecht-Gates,
-//            keine Zone der Verdrehung.
+//   Idle   - Arm zu steil. Ergebnis allein des Neigungs-Gates, keine Zone der
+//            Verdrehung.
 //   Turned - Hand abgedreht. Der Scroll-Joystick kommt nicht mit dieser
 //            Haltung, sondern erst ueber AirMouseState::onTwistHeld().
+//
+// Zwei Gates: das enge, symmetrische level() ist Voraussetzung der
+// Ein/Aus-Drehgeste (TwistToggle liest es), das weite und asymmetrische
+// poseUp/poseDown entscheidet ueber Idle. Laeuft der Scroll-Modus (holdTurned),
+// gilt letzteres gar nicht - Scrollen heisst den Arm neigen.
 //
 // Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft; die Werte stehen
 // in PoseTuning und sind per static_assert an cfg:: gebunden.
@@ -18,8 +23,15 @@ struct PoseTuning {
     float    turnOnDeg       = 70.f;   // ab hier gilt die Hand als abgedreht
     float    turnOffDeg      = 55.f;   // erst hier wieder als gerade
 
-    float    levelMaxDeg     = 35.f;   // Waagrecht-Gate, Grad
-    float    levelHystDeg    =  8.f;
+    float    levelMaxDeg     = 50.f;   // Waagrecht-Gate der Geste, Grad
+    float    levelHystDeg    =  8.f;   // Hysterese beider Gates
+
+    // Neigungs-Gate der Haltung. Weiter als levelMaxDeg, weil die Verdrehung
+    // dort noch gut beobachtbar ist (cos 65 Grad = 0.42 der Schwerkraft quer
+    // zur Armachse); asymmetrisch, weil der haengende Arm Ruhezustand ist.
+    float    poseUpMaxDeg    = 65.f;   // Grad, Hand oben
+    float    poseDownMaxDeg  = 35.f;   // Grad, Hand unten
+    float    poseHoldMaxDeg  = 80.f;   // auch im Scroll-Modus nicht mehr entscheiden
 
     float    modeTau         = 0.10f;  // Glaettung fuer Haltung und Geste, s
     float    rollCompTau     = 0.25f;  // langsamere Fassung fuer den Zeiger, s
@@ -44,30 +56,37 @@ public:
         pending_ = Pose::Point;
     }
 
-    Pose update(float twistDeg, float elevDeg, float gyroSum, float dt, uint32_t now_ms) {
+    // holdTurned: der Scroll-Modus laeuft. Dann entscheidet die Verdrehung
+    // allein, das Neigungs-Gate gilt nicht.
+    Pose update(float twistDeg, float elevDeg, float gyroSum, float dt, uint32_t now_ms,
+                bool holdTurned = false) {
         smoothAngles(twistDeg, elevDeg, dt);
         updateLevelGate();
+        updatePoseGate();
 
         if (!t_.classify) return pose_ = Pose::Point;
 
         // Waehrend einer heftigen Bewegung bleibt die Haltung stehen; die
         // Winkel oben laufen weiter.
         if (gyroSum > t_.stillDps) tMoving_ = now_ms;
-        if (now_ms - tMoving_ < t_.calmMs) {
-            // Haltezeit neu anlaufen lassen, sonst waere sie beim Ende der
-            // Bewegung schon halb abgelaufen.
-            pending_  = pose_;
-            tPending_ = now_ms;
-            return pose_;
+        if (now_ms - tMoving_ < t_.calmMs) return freeze(now_ms);
+
+        if (holdTurned) {
+            // So steil steht der Unterarm fast senkrecht und die Verdrehung ist
+            // nicht mehr beobachtbar - dort lieber stehen bleiben als auf einem
+            // Rauschwert umspringen.
+            if (fabsf(fElev_) > t_.poseHoldMaxDeg) return freeze(now_ms);
+            return settle(classify(), now_ms);
         }
 
-        return settle(level_ ? classify() : Pose::Idle, now_ms);
+        return settle(poseGate_ ? classify() : Pose::Idle, now_ms);
     }
 
     Pose  pose()            const { return pose_; }
     float relTwistDeg()     const { return rel_; }
     float relTwistSlowDeg() const { return relSlow_; }
     bool  level()           const { return level_; }
+    bool  poseGate()        const { return poseGate_; }
 
 private:
     PoseTuning t_;
@@ -77,6 +96,7 @@ private:
     float    fTwistSlow_ = 0.f;
     float    relSlow_    = 0.f;
     bool     level_      = true;
+    bool     poseGate_   = true;
     Pose     pose_       = Pose::Point;
     Pose     pending_    = Pose::Point;
     uint32_t tPending_   = 0;
@@ -100,6 +120,25 @@ private:
         const float tilt = fabsf(fElev_);
         if (level_) { if (tilt > t_.levelMaxDeg)                    level_ = false; }
         else        { if (tilt < t_.levelMaxDeg - t_.levelHystDeg)  level_ = true;  }
+    }
+
+    // Vorzeichenbehaftet, im Gegensatz zum Gate der Geste: oben und unten haben
+    // verschiedene Schranken.
+    void updatePoseGate() {
+        if (poseGate_) {
+            if (fElev_ > t_.poseUpMaxDeg || fElev_ < -t_.poseDownMaxDeg) poseGate_ = false;
+        } else if (fElev_ <  t_.poseUpMaxDeg   - t_.levelHystDeg &&
+                   fElev_ > -t_.poseDownMaxDeg + t_.levelHystDeg) {
+            poseGate_ = true;
+        }
+    }
+
+    // Die Entscheidung ruht. Die Haltezeit laeuft dabei neu an, sonst waere sie
+    // beim Ende der Sperre schon halb abgelaufen.
+    Pose freeze(uint32_t now_ms) {
+        pending_  = pose_;
+        tPending_ = now_ms;
+        return pose_;
     }
 
     // Ein Wechsel zaehlt erst, wenn er dwellMs stabil anliegt.

@@ -25,7 +25,8 @@ static int checks   = 0;
 // Ein Pinch darf nie beide Tasten zugleich melden - sonst kaeme im Controller
 // ein Links- und ein Rechtsklick im selben Takt heraus.
 static bool actionsConsistent(const Actions& a) {
-    if (a.click && a.rightClick) return false;
+    if (a.pressLeft && a.rightClick) return false;
+    if (a.pressLeft && a.releaseLeft) return false;
     return true;
 }
 
@@ -63,7 +64,7 @@ static void test_offIgnoresEverything() {
     const Actions a2 = s.onPose(Pose::Turned);
     const Actions a3 = s.onPose(Pose::Idle);
 
-    CHECK(!a1.click, "ausgeschaltet wird links geklickt");
+    CHECK(!a1.pressLeft, "ausgeschaltet geht die linke Taste runter");
     CHECK(!a1.rightClick, "ausgeschaltet wird rechts geklickt");
     CHECK(!a2.enterScroll, "ausgeschaltet wird gescrollt");
     CHECK(a3.hapticPulses == 0, "ausgeschaltet brummt es");
@@ -99,11 +100,70 @@ static void test_twistToggleResetsPose() {
 
 // --- Der Pinch, je nach Haltung ---------------------------------------
 
-static void test_pinchWhilePointingClicksLeft() {
-    const Actions a = turnedOn().onPinch(true, false);
-    CHECK(a.click, "Pinch beim Zeigen klickt nicht links");
+// Druck UND Rueckmeldung kommen sofort - das ist der ganze Unterschied zu den
+// frueheren Doppel-Pinch-Entwuerfen, die den Klick als Ganzes verzoegerten. Nur
+// das Loslassen wartet auf das Fenster.
+static void test_pinchWhilePointingPressesImmediately() {
+    AirMouseState s = turnedOn();
+    const Actions a = s.onPinch(true, false);
+    CHECK(a.pressLeft, "Pinch beim Zeigen drueckt die linke Taste nicht");
     CHECK(!a.rightClick, "Pinch beim Zeigen klickt rechts");
-    CHECK(a.hapticPulses == 1, "Linksklick meldet nicht genau einen Impuls");
+    CHECK(a.hapticPulses == 1, "der Pinch meldet sich nicht sofort an der Hand");
+    CHECK(s.holding(), "die Taste gilt nach dem Pinch nicht als unten");
+    CHECK(!s.dragging(), "der erste Pinch verriegelt schon das Ziehen");
+}
+
+// Kein zweiter Pinch: Taste hoch. Ohne weitere Vibration - die kam schon beim
+// Pinch, und ein zweiter Puls hier waere vom Rechtsklick nicht zu unterscheiden.
+static void test_clickWindowCompletesTheClick() {
+    AirMouseState s = turnedOn();
+    s.onPinch(true, false);
+    const Actions a = s.onClickWindow();
+    CHECK(a.releaseLeft, "das Fensterende gibt die Taste nicht frei");
+    CHECK(a.hapticPulses == 0, "das Fensterende brummt ein zweites Mal");
+    CHECK(!s.holding(), "die Taste bleibt nach dem Klick unten");
+
+    // Ohne gedrueckte Taste ist das Fensterende ein No-Op.
+    CHECK(!s.onClickWindow().releaseLeft, "das Fensterende gibt ins Leere frei");
+}
+
+// Die BEWEGUNG macht aus dem Klick ein Ziehen - kein zweiter Pinch, kein
+// Zeitband. Die Taste ist seit dem Pinch unten und bleibt es jetzt nur laenger.
+static void test_movementTurnsTheClickIntoADrag() {
+    AirMouseState s = turnedOn();
+    s.onPinch(true, false);
+    const Actions a = s.onDragMove();
+    CHECK(!a.pressLeft, "die Taste wird ein zweites Mal gedrueckt");
+    CHECK(!a.releaseLeft, "die Bewegung gibt die Taste frei");
+    CHECK(a.hapticPulses == 3, "das Ziehen meldet nicht drei Impulse");
+    CHECK(s.dragging(), "die Bewegung verriegelt das Ziehen nicht");
+
+    // Und danach laeuft das Fenster ins Leere - das Ziehen endet nicht von
+    // selbst, sondern nur durch Pinch, Haltungswechsel oder Zwangsfreigabe.
+    CHECK(!s.onClickWindow().releaseLeft, "das Fensterende beendet das Ziehen");
+    CHECK(s.dragging(), "das Ziehen endet mit dem Fenster");
+}
+
+// Ohne gedrueckte Taste ist Bewegung nur Bewegung.
+static void test_movementWithoutPinchDoesNothing() {
+    AirMouseState s = turnedOn();
+    const Actions a = s.onDragMove();
+    CHECK(!a.pressLeft && !a.releaseLeft, "Bewegung allein greift zu");
+    CHECK(!s.holding(), "Bewegung allein haelt die Taste");
+    CHECK(a.hapticPulses == 0, "Bewegung allein brummt");
+}
+
+// Der Loese-Impuls des laufenden Pinch faellt genau hierhin. Er darf nichts
+// ausloesen - weder ein zweites Druecken noch ein Ziehen.
+static void test_pinchDuringOpenWindowIsIgnored() {
+    AirMouseState s = turnedOn();
+    s.onPinch(true, false);
+    const Actions a = s.onPinch(true, false);
+    CHECK(!a.pressLeft, "der zweite Pinch drueckt erneut");
+    CHECK(!a.releaseLeft, "der zweite Pinch gibt frei");
+    CHECK(a.hapticPulses == 0, "der zweite Pinch brummt");
+    CHECK(!s.dragging(), "ein zweiter Pinch verriegelt noch immer das Ziehen");
+    CHECK(s.holding(), "der zweite Pinch verwirft den laufenden Klick");
 }
 
 // Kurz nach einer zuegigen Ausdrehung zeigt die FSM-Pose noch Point (siehe
@@ -114,7 +174,7 @@ static void test_pinchWhilePointingClicksLeft() {
 // dreht.
 static void test_pinchSuppressedWhenArmPhysicallyOut() {
     const Actions a = turnedOn().onPinch(true, true);
-    CHECK(!a.click, "Pinch klickt links, obwohl der Arm ausgedreht ist");
+    CHECK(!a.pressLeft, "Pinch drueckt links, obwohl der Arm ausgedreht ist");
     CHECK(!a.rightClick, "Pinch klickt rechts, obwohl die FSM-Pose noch Point ist");
     CHECK(a.hapticPulses == 0, "unterdrueckter Pinch brummt trotzdem");
 }
@@ -123,7 +183,7 @@ static void test_pinchWhileTurnedClicksRight() {
     AirMouseState s = inPose(Pose::Turned);
     const Actions a = s.onPinch(true, false);
     CHECK(a.rightClick, "Pinch bei gedrehter Hand klickt nicht rechts");
-    CHECK(!a.click, "Pinch bei gedrehter Hand klickt links");
+    CHECK(!a.pressLeft, "Pinch bei gedrehter Hand drueckt links");
     CHECK(a.hapticPulses == 2, "Rechtsklick meldet nicht zwei Impulse");
 }
 
@@ -132,7 +192,7 @@ static void test_pinchWhileTurnedClicksRight() {
 static void test_pinchWhileActuallyScrollingDoesNothing() {
     AirMouseState s = scrolling();
     const Actions a = s.onPinch(false, false);
-    CHECK(!a.click, "Pinch beim Scrollen klickt links");
+    CHECK(!a.pressLeft, "Pinch beim Scrollen drueckt links");
     CHECK(!a.rightClick, "Pinch beim Scrollen klickt rechts");
     CHECK(a.hapticPulses == 0, "Pinch beim Scrollen brummt");
 }
@@ -169,7 +229,7 @@ static void test_rightClickIgnoresStaleScrollIdleWhenJoystickIsOff() {
 static void test_pinchInIdleDoesNothing() {
     AirMouseState s = inPose(Pose::Idle);
     const Actions a = s.onPinch(true, false);
-    CHECK(!a.click && !a.rightClick, "Pinch bei nicht waagrechtem Arm klickt");
+    CHECK(!a.pressLeft && !a.rightClick, "Pinch bei nicht waagrechtem Arm klickt");
     CHECK(a.hapticPulses == 0, "Pinch in Idle brummt");
 }
 
@@ -181,7 +241,7 @@ static void test_exactlyOneButtonPerPose() {
         AirMouseState s = inPose(p);
         const Actions a = s.onPinch(true, false);
         CHECK(actionsConsistent(a), "Pinch meldet beide Tasten zugleich");
-        if (a.click)           left++;
+        if (a.pressLeft)       left++;
         else if (a.rightClick) right++;
         else                   none++;
     }
@@ -190,19 +250,30 @@ static void test_exactlyOneButtonPerPose() {
     CHECK(none == 1,  "nicht genau eine Haltung bleibt wirkungslos");
 }
 
-// Der Pinch veraendert den Zustand nicht - er ist reine Ausgabe. Sonst haette
-// die Klickrate einen Einfluss darauf, was die naechste Geste bedeutet.
-static void test_pinchIsStateless() {
+// Der Pinch laesst Power und Pose unberuehrt. Die Grab-Achse ist die einzige,
+// die er bewegt - und zwar absichtlich: darauf beruht das Ziehen. Ausserhalb
+// von Point beruehrt er auch die gar nicht.
+static void test_pinchLeavesPowerAndPoseAlone() {
     for (Pose p : {Pose::Point, Pose::Idle, Pose::Turned}) {
         AirMouseState s = inPose(p);
-        const Actions first = s.onPinch(true, false);
         for (int i = 0; i < 20; i++) {
-            const Actions again = s.onPinch(true, false);
-            CHECK(again.click      == first.click,      "Linksklick haengt an der Vorgeschichte");
-            CHECK(again.rightClick == first.rightClick, "Rechtsklick haengt an der Vorgeschichte");
+            const Actions a = s.onPinch(true, false);
             CHECK(s.pose() == p, "Pinch veraendert die Haltung");
             CHECK(s.on(), "Pinch schaltet ab");
+            CHECK(actionsConsistent(a), "widerspruechliche Aktionen");
+            if (p != Pose::Point) CHECK(!s.holding(), "Pinch haelt die Taste ausserhalb von Point");
         }
+    }
+}
+
+// In Turned bleibt der Rechtsklick zustandslos: beliebig viele Pinches ergeben
+// beliebig viele gleiche Rechtsklicks, ohne Vorgeschichte.
+static void test_rightClickIsStateless() {
+    AirMouseState s = inPose(Pose::Turned);
+    const Actions first = s.onPinch(true, false);
+    for (int i = 0; i < 20; i++) {
+        const Actions again = s.onPinch(true, false);
+        CHECK(again.rightClick == first.rightClick, "Rechtsklick haengt an der Vorgeschichte");
     }
 }
 
@@ -277,6 +348,76 @@ static void test_onTwistHeldOnlyInTurned() {
     CHECK(!a.enterScroll, "onTwistHeld wirkt im Ruhezustand");
 }
 
+// --- Die Grab-Achse ----------------------------------------------------
+
+// Hilfe: verriegeltes Ziehen ueber den Doppel-Pinch.
+static AirMouseState dragging() {
+    AirMouseState s = turnedOn();
+    s.onPinch(true, false);
+    s.onDragMove();
+    return s;
+}
+
+// DIE Invariante: nie mit gedrueckter Taste abschalten. Eine haengende Taste,
+// die der Rechner nicht mehr loswird, ist der einzige Fehlerfall hier, der ihn
+// unbenutzbar macht. Gilt in BEIDEN Zustaenden der Achse - auch das noch
+// unentschiedene Pending haelt die Taste koerperlich unten.
+static void test_powerOffReleasesTheButton() {
+    AirMouseState s = dragging();
+    const Actions a = s.onPower();
+    CHECK(a.releaseLeft, "das Abschalten gibt die Taste nicht frei");
+    CHECK(!s.holding(), "ausgeschaltet, aber die Taste ist noch unten");
+
+    AirMouseState p = turnedOn();
+    p.onPinch(true, false);                 // Pending, Fenster laeuft noch
+    CHECK(p.onPower().releaseLeft, "das Abschalten im offenen Fenster laesst die Taste unten");
+}
+
+// Zweite Fassung derselben Invariante: Arm abgelegt oder abgedreht heisst
+// fallenlassen.
+static void test_leavingPointReleasesTheButton() {
+    for (Pose p : { Pose::Idle, Pose::Turned }) {
+        AirMouseState s = dragging();
+        const Actions a = s.onPose(p);
+        CHECK(a.releaseLeft, "das Verlassen der Zeige-Haltung gibt die Taste nicht frei");
+        CHECK(!s.holding(), "die Grab-Achse ueberlebt den Haltungswechsel");
+    }
+}
+
+// Der zweite, schnellere Ausstieg - und zugleich der Grund, warum der Automat
+// waehrend des Ziehens nie eine Taste druecken kann.
+static void test_pinchWhileDraggingReleasesInsteadOfPressing() {
+    AirMouseState s = dragging();
+    const Actions a = s.onPinch(true, false);
+    CHECK(a.releaseLeft, "der Pinch laesst waehrend des Ziehens nicht los");
+    CHECK(!a.pressLeft, "der Pinch drueckt waehrend des Ziehens erneut");
+    CHECK(a.hapticPulses == 3, "das Fallenlassen meldet nicht drei Impulse");
+    CHECK(!s.holding(), "das Ziehen laeuft nach dem Pinch weiter");
+
+    // Danach ist alles wieder normal: der naechste Pinch beginnt einen Klick.
+    CHECK(s.onPinch(true, false).pressLeft, "nach dem Loslassen drueckt der Pinch nicht mehr");
+}
+
+static void test_dragReleaseIsUnconditional() {
+    AirMouseState s = dragging();
+    CHECK(s.onDragRelease().releaseLeft, "die Zwangsfreigabe gibt die Taste nicht frei");
+    CHECK(!s.holding(), "die Zwangsfreigabe wirkt nicht");
+    CHECK(!s.onDragRelease().releaseLeft,
+          "die Zwangsfreigabe meldet eine Freigabe, obwohl nichts gehalten wird");
+}
+
+// Ein/Aus ist das einzige Ereignis mit langem Puls - danach geht gar nichts
+// mehr, das muss sich von jedem Klickmuster abheben.
+static void test_powerUsesTheLongPulse() {
+    AirMouseState s;
+    CHECK(s.onPower().hapticLong, "das Einschalten brummt nicht lang");
+    CHECK(s.onPower().hapticLong, "das Ausschalten brummt nicht lang");
+
+    AirMouseState t = turnedOn();
+    CHECK(!t.onPose(Pose::Turned).hapticLong, "der Haltungswechsel brummt lang");
+    CHECK(!t.onPinch(true, false).hapticLong, "der Rechtsklick brummt lang");
+}
+
 // --- Erschoepfender Durchlauf -----------------------------------------
 
 // Jeder erreichbare Zustand mal jedes Ereignis. Prueft nicht die Bedeutung,
@@ -288,7 +429,7 @@ static void test_allStatesAllEvents() {
     int visited = 0;
     for (Power pw : powers) {
         for (Pose po : poses) {
-            for (int ev = 0; ev < 9; ev++) {
+            for (int ev = 0; ev < 11; ev++) {
                 AirMouseState s;
                 if (pw == Power::On) { s.onPower(); s.onPose(po); }
                 else if (po != Pose::Point) continue;   // aus gibt es nur Point
@@ -307,25 +448,28 @@ static void test_allStatesAllEvents() {
                     case 6: a = s.onPose(Pose::Idle);          break;
                     case 7: a = s.onPose(Pose::Turned);        break;
                     case 8: a = s.onTwistHeld();               break;
+                    case 9:  a = s.onClickWindow();            break;
+                    case 10: a = s.onDragMove();               break;
                 }
                 visited++;
 
                 CHECK(actionsConsistent(a), "widerspruechliche Aktionen");
                 if (!s.on()) {
-                    CHECK(!a.click && !a.rightClick, "geklickt, obwohl ausgeschaltet");
+                    CHECK(!a.pressLeft && !a.rightClick, "geklickt, obwohl ausgeschaltet");
                     CHECK(!a.enterScroll, "gescrollt, obwohl ausgeschaltet");
+                    CHECK(!s.holding(), "Taste unten, obwohl ausgeschaltet");
                 }
                 // armOut unterdrueckt nur den Linksklick in Point - er darf
                 // den Rechtsklick in Turned nicht mitreissen, sonst waere ein
                 // ausgedrehter Arm in der abgedrehten Haltung nie klickbar.
                 if (armOut && po == Pose::Point) {
-                    CHECK(!a.click, "Pinch klickt links, obwohl der Arm ausgedreht ist");
+                    CHECK(!a.pressLeft, "Pinch drueckt links, obwohl der Arm ausgedreht ist");
                 }
             }
         }
     }
-    // Aus: nur Point -> 1 Gruppe. Ein: 3 Haltungen. Zusammen 4 mal 9 Ereignisse.
-    CHECK(visited == 36, "nicht alle Kombinationen durchlaufen");
+    // Aus: nur Point -> 1 Gruppe. Ein: 3 Haltungen. Zusammen 4 mal 11 Ereignisse.
+    CHECK(visited == 44, "nicht alle Kombinationen durchlaufen");
 }
 
 // Zufaellige, lange Ereignisfolge - findet Reihenfolgen, an die man beim
@@ -337,7 +481,8 @@ static void test_randomWalkKeepsInvariants() {
         rng = rng * 1664525u + 1013904223u;
         Actions a;
         bool armOut = false;
-        switch ((rng >> 16) % 9) {
+        const bool wasHolding = s.holding();
+        switch ((rng >> 16) % 11) {
             case 0: a = s.onPower();                   break;
             case 1: a = s.onPinch(true, false);        break;
             case 2: a = s.onPinch(false, false);       break;
@@ -347,16 +492,18 @@ static void test_randomWalkKeepsInvariants() {
             case 6: a = s.onPose(Pose::Idle);          break;
             case 7: a = s.onPose(Pose::Turned);        break;
             case 8: a = s.onTwistHeld();               break;
+            case 9:  a = s.onClickWindow();            break;
+            case 10: a = s.onDragMove();               break;
         }
         if (!actionsConsistent(a)) { CHECK(false, "widerspruechliche Aktionen im Zufallslauf"); return; }
 
         // Jede Wirkung setzt den eingeschalteten Zustand voraus.
-        if (a.click || a.rightClick || a.enterScroll) {
+        if (a.pressLeft || a.rightClick || a.enterScroll) {
             if (!s.on()) { CHECK(false, "Wirkung im Ruhezustand"); return; }
         }
         // Und jede Taste die Haltung, die zu ihr gehoert.
-        if (a.click      && !s.pointing()) { CHECK(false, "Linksklick ausserhalb der Zeige-Haltung"); return; }
-        if (armOut && a.click) { CHECK(false, "Linksklick trotz ausgedrehtem Arm"); return; }
+        if (a.pressLeft  && !s.pointing()) { CHECK(false, "Linksklick ausserhalb der Zeige-Haltung"); return; }
+        if (armOut && a.pressLeft) { CHECK(false, "Linksklick trotz ausgedrehtem Arm"); return; }
         if (a.rightClick && s.pose() != Pose::Turned) {
             CHECK(false, "Rechtsklick ausserhalb der abgedrehten Haltung"); return;
         }
@@ -365,6 +512,20 @@ static void test_randomWalkKeepsInvariants() {
             CHECK(false, "Joystick laeuft ausserhalb der abgedrehten Haltung"); return;
         }
         if (s.scrolling() && !s.on()) { CHECK(false, "Joystick laeuft im Ruhezustand"); return; }
+
+        // Die Invarianten der Grab-Achse. Sie gelten fuer holding(), nicht nur
+        // fuer dragging(): auch das unentschiedene Pending haelt die Taste
+        // koerperlich unten.
+        if (s.holding() && !s.on()) {
+            CHECK(false, "ausgeschaltet mit gedrueckter Taste"); return;
+        }
+        if (s.holding() && s.pose() != Pose::Point) {
+            CHECK(false, "Taste unten ausserhalb der Zeige-Haltung"); return;
+        }
+        // Wer drueckt, hielt vorher nichts; wer loslaesst, hielt vorher etwas.
+        // Sonst laufen HID-Zustand und Achse auseinander.
+        if (a.pressLeft   &&  wasHolding) { CHECK(false, "zweimal gedrueckt");     return; }
+        if (a.releaseLeft && !wasHolding) { CHECK(false, "ins Leere losgelassen"); return; }
     }
 }
 
@@ -373,7 +534,11 @@ int main() {
     test_offIgnoresEverything();
     test_twistTogglePowersOn();
     test_twistToggleResetsPose();
-    test_pinchWhilePointingClicksLeft();
+    test_pinchWhilePointingPressesImmediately();
+    test_clickWindowCompletesTheClick();
+    test_movementTurnsTheClickIntoADrag();
+    test_movementWithoutPinchDoesNothing();
+    test_pinchDuringOpenWindowIsIgnored();
     test_pinchSuppressedWhenArmPhysicallyOut();
     test_pinchWhileTurnedClicksRight();
     test_pinchWhileActuallyScrollingDoesNothing();
@@ -381,7 +546,8 @@ int main() {
     test_rightClickIgnoresStaleScrollIdleWhenJoystickIsOff();
     test_pinchInIdleDoesNothing();
     test_exactlyOneButtonPerPose();
-    test_pinchIsStateless();
+    test_pinchLeavesPowerAndPoseAlone();
+    test_rightClickIsStateless();
     test_samePoseIsNoOp();
     test_turnedAloneDoesNotScroll();
     test_leavingPointResetsPointer();
@@ -389,6 +555,11 @@ int main() {
     test_leavingTurnedStopsScrolling();
     test_idleIsSilent();
     test_onTwistHeldOnlyInTurned();
+    test_powerOffReleasesTheButton();
+    test_leavingPointReleasesTheButton();
+    test_pinchWhileDraggingReleasesInsteadOfPressing();
+    test_dragReleaseIsUnconditional();
+    test_powerUsesTheLongPulse();
     test_allStatesAllEvents();
     test_randomWalkKeepsInvariants();
 

@@ -380,15 +380,33 @@ Bildet Verdrehung und Armneigung auf eine von drei Haltungen ab:
 | Haltung | Bedeutung |
 |---|---|
 | `Point` | Hand gerade — Cursor folgt der Bewegung, Pinch = Linksklick |
-| `Idle` | Arm nicht waagrecht — nichts passiert |
+| `Idle` | Arm zu steil — nichts passiert |
 | `Turned` | Hand abgedreht — Pinch = Rechtsklick, nach einer Sekunde zusätzlich Scroll |
 
 Wichtig: **`Idle` ist keine Zone der Verdrehung.** Es ist ausschliesslich das Ergebnis des
-Waagrecht-Gates. Hängt der Arm herunter oder ist er angehoben, ist keine der Haltungen
-gemeint — dann liefert der Detektor `Idle`, egal wie die Hand verdreht ist. Diese
-Bedingung wird absolut gegen die Schwerkraft gemessen und nicht relativ zum Einschalten:
-"waagrecht" soll waagrecht heissen, sonst kalibriert man sich die Bedingung durch
-Einschalten in schiefer Haltung gleich weg.
+Neigungs-Gates. Diese Bedingung wird absolut gegen die Schwerkraft gemessen und nicht
+relativ zum Einschalten: "waagrecht" soll waagrecht heissen, sonst kalibriert man sich die
+Bedingung durch Einschalten in schiefer Haltung gleich weg.
+
+Es gibt **zwei** solche Gates mit verschiedenen Aufgaben. Beobachtbar ist die Verdrehung,
+solange die Schwerkraft eine Komponente quer zur Unterarmachse hat; deren Betrag ist
+`sqrt(ux²+uz²) = cos(elev)`. Bei 35° sind das noch 82 % des Signals, erst jenseits von
+rund 70° wird `atan2f(ux, uz)` wirklich schlecht konditioniert.
+
+- **eng und symmetrisch** (`LEVEL_MAX_DEG`, ±35°, `level()`): Voraussetzung der
+  Ein/Aus-Drehgeste. Dort wird geschaltet, und eine Fehlschaltung kostet mehr als eine
+  verpasste — also nur bei waagrechtem Arm, wo der Winkel am verlässlichsten ist.
+- **weit und asymmetrisch** (`POSE_UP_MAX_DEG` +65°, `POSE_DOWN_MAX_DEG` −35°,
+  `poseGate()`): entscheidet über `Idle`. Die beiden Richtungen bedeuten Verschiedenes —
+  nach oben zeigt und scrollt man, nach unten hängt der Arm im Ruhezustand.
+
+Läuft der Scroll-Modus, gilt das weite Gate **gar nicht** (Parameter `holdTurned`, gespeist
+aus `fsm_.scrolling()`). Scrollen heisst den Arm zu neigen; würde das Gate hier greifen,
+beendete das Scrollen sich selbst: `Idle` verlässt `Turned`, und damit löscht die FSM
+`scrollOn_`. Der einzige Weg aus dem Scroll-Modus ist deshalb das Zurückdrehen — und das
+funktioniert auch bei erhobener Hand, ohne den Arm erst senken zu müssen. Nur jenseits von
+`POSE_HOLD_MAX_DEG` (80°) steht der Unterarm so steil, dass die Verdrehung nicht mehr zu
+sehen ist; dort bleibt die Haltung stehen, statt auf einem Rauschwert umzuspringen.
 
 Innerhalb des Gates hat die Verdrehachse nur noch **eine** Schwelle, mit Hysterese:
 
@@ -450,6 +468,15 @@ das Edge-Impulse-SDK nicht — es bleibt damit hardwarefrei.
 auftreten. **Die Entprellung** (`DEBOUNCE_MS`) verhindert Mehrfachauslösungen. Beide
 zählen ihre Ablehnungen mit (`nDeb`, `nGyro` im Teleplot) — sonst wäre nicht zu
 unterscheiden, ob eine Flanke gar nicht erkannt oder erkannt und danach verworfen wurde.
+
+**Nach einem Rechtsklick sperrt der Controller zusätzlich** (`holdOff()`,
+`RIGHT_CLICK_HOLDOFF_MS = 700 ms`). Dort lösten bisher fast sicher zwei Klicks aus, und
+der zweite schloss das eben geöffnete Kontextmenü wieder: die zwei Haptikpulse dauern
+160 ms und das Lösen des Pinch erzeugt einen eigenen Impuls — beides fällt genau ans Ende
+der 180 ms Entprellung. Der Linksklick behält die reine Entprellung, damit ein bewusster
+Doppelklick aus zwei Pinches möglich bleibt. Die Sperre verlängert das Fenster, sie
+verschiebt es nicht: `tLastPinch_` bleibt unberührt, und eine über die ganze Sperre
+anhaltende Erschütterung zündet danach nicht nach, weil `wasHot_` durchgehend wahr bleibt.
 
 **Das Einfrieren des Cursors** nach einem Klick ist an das offene `env`-Gate gebunden und
 nicht an eine feste Zeit. Der Zeiger ruht also nur, solange die Erschütterung wirklich
@@ -525,12 +552,22 @@ twist
 Die Rückkehrschwelle (30°) ist strenger als die Haltungs-Hysterese (55°). Sonst würde ein
 halbherziges Zurückwackeln auf 54° die Maus abschalten.
 
+**Wie weit ausgedreht wird, spielt keine Rolle.** Ein tieferer Scheitelwinkel als vierte
+Bedeutung derselben Bewegung — über etwa 150° hinaus als Auslöser für das Ziehen — ist
+gebaut und wieder ausgebaut worden. Er funktionierte für sich genommen (`TwistToggle`
+merkte sich den grössten erreichten Betrag und entschied erst beim Zurückkommen), aber er
+lag auf derselben Achse wie Ein/Aus: eine etwas zu weit geratene Schaltgeste wurde
+stillschweigend zum Ziehen, und Ein/Aus verlor am Gerät messbar an Zuverlässigkeit. Das
+ist ein brauchbares Beispiel für die Arbeit — eine Geste kann korrekt implementiert und
+trotzdem der falsche Entwurf sein, weil sie sich eine Achse mit einer wichtigeren teilt.
+
 **Warum die Lageschätzung und nicht die integrierte Drehrate.** Der Winkel aus dem
 Madgwick-Filter ist *absolut*. Aus `gy` integriert driftete die Referenz weg, und die
 Bedingung "wieder zurück auf gerade" wäre nach einer Minute nicht mehr dieselbe wie am
 Anfang. Die Kehrseite: bei senkrecht gehaltenem Unterarm ist die Verdrehung aus der
-Schwerkraft **nicht beobachtbar**. Das Waagrecht-Gate ist deshalb keine Bequemlichkeit
-mehr, sondern eine Voraussetzung der Geste — `TwistToggle` verlangt `level` durchgehend.
+Schwerkraft **nicht beobachtbar**. Das enge Waagrecht-Gate ist deshalb keine
+Bequemlichkeit, sondern eine Voraussetzung der Geste — `TwistToggle` verlangt `level()`
+durchgehend, und zwar die strenge Fassung mit ±35°, nicht das weitere Gate der Haltung.
 
 **Der abgesicherte Fehlermodus.** Verpasst der Klassifikator einen Pinch bei 90°, dreht
 der Nutzer zurück — und die Maus ginge *aus* statt rechtszuklicken. Ein verfehlter Klick
@@ -541,6 +578,67 @@ vom Modell unabhängig.
 
 Diese Geste ersetzt ein früheres Schütteln, dessen Schwelle (350 °/s) nur knapp über den
 rund 250 °/s des normalen Gebrauchs lag.
+
+### 6.9a Ziehen — die Achse `Grab`
+
+Ohne gedrückt gehaltene Taste fehlt einer Maus mehr, als es zunächst scheint: Text
+markieren, ein Fenster verschieben, eine Datei ziehen, einen Schieberegler oder einen
+Scrollbalken-Griff bedienen. HID-seitig ist das kein Problem — `mouseButtonPress()` ohne
+`Release` hält die Taste, und beide Bibliotheken tragen die Tastenmaske in jeden folgenden
+`mouseMove`-Bericht mit. Es fehlte allein die Geste.
+
+**Warum nicht der naheliegende Weg.** Ein *gehaltener* Pinch ist mit diesem Sensor
+unsichtbar: die Hüllkurve ist ein Hochpass ab 30 Hz und sieht den Kontakt und das Lösen als
+zwei Impulse, aber nichts dazwischen. Naheliegend wäre deshalb „Kontakt = Taste runter,
+Lösen = Taste hoch". Das scheitert an der Zuverlässigkeit des zweiten Impulses — und ein
+verpasstes Lösen hiesse eine klebende Taste, der schlimmste Fehlerfall überhaupt.
+
+**Klick und Ziehen teilen sich einen Pfad.** Es gibt keinen `Actions::click` mehr. Der
+Pinch drückt die Taste **sofort** (`Grab::Pending`), und nur das Loslassen wartet:
+
+```
+Pinch  ──► pressLeft, Grab::Pending
+            │
+            ├── kein zweiter Pinch bis DRAG_WINDOW_MS ──► releaseLeft, 1 Impuls  = Klick
+            └── zweiter Pinch im Fenster ──────────────► Grab::On,   3 Impulse   = Ziehen
+                                                          │
+                                                          └── Pinch ──► releaseLeft = fallenlassen
+```
+
+Genau daran scheiterten alle früheren Doppel-Pinch-Entwürfe: sie warteten, bevor sie
+überhaupt etwas taten, und legten ihre Fensterlänge damit auf *jeden* gewöhnlichen Klick.
+Hier ist der Druck unverzögert; verzögert ist nur das Loslassen, und die Rückmeldung an
+die Hand kommt erst bei der Entscheidung — sonst läge die Vibration mitten im Fenster, in
+dem der zweite Pinch erwartet wird.
+
+**Das Band für den zweiten Pinch** ist `DEBOUNCE_MS` bis `DRAG_WINDOW_MS`, also 200 bis
+350 ms; ein menschlicher Doppeltipp liegt bei 150 bis 300 ms. Die Entprellung ist dabei
+nicht bloss eine untere Grenze, sondern trägt eine Aufgabe: sie sperrt den **Löse-Impuls**
+des ersten Pinch aus, der sonst als zweiter Pinch gälte und auf jedem gewöhnlichen Klick
+ein Ziehen verriegelte. Beide Zahlen gehören deshalb zusammen eingestellt, und ein
+`static_assert` hält das Band mindestens 100 ms breit.
+
+**Der Preis ist eine Invariante:** nie mit gedrückter Taste abschalten oder die
+Zeige-Haltung verlassen. Sie gilt für `holding()` und nicht nur für `dragging()` — auch
+das noch unentschiedene `Pending` hält die Taste körperlich unten. Eingelöst wird sie an
+drei Stellen, alle über die einzige private Methode `dropGrab()`:
+
+| Ereignis | Wirkung bei gedrückter Taste |
+|---|---|
+| `onPower()` | gibt die Taste frei, dann erst aus |
+| `onPose()` beim Verlassen von `Point` | gibt frei — Arm abgelegt oder abgedreht heisst fallenlassen |
+| `onDragRelease()` | bedingungslos, für die Zwangsfreigabe |
+
+Der Zufallslauf in `test_state_machine` prüft über 20 000 Ereignisfolgen unter anderem,
+dass nie zweimal hintereinander gedrückt und nie ins Leere losgelassen wird — sonst liefen
+HID-Zustand und Achse auseinander.
+
+Alles Zeitliche steht im Controller (`runDrag()`), weil der Automat keine Zeit kennt: das
+Fenster selbst, eine **Zwangsfreigabe** nach `DRAG_MAX_MS` (30 s) und ein
+**Erinnerungsimpuls** alle `DRAG_REMIND_MS` (2 s). Der Impuls sperrt anschliessend für
+200 ms die Klickerkennung (`pinch_.holdOff()`) — sonst läse sie die eigene Vibration als
+Pinch und beendete das Ziehen, an das sie gerade erinnert. Dieselbe Sperre schützt den
+langen Ein/Aus-Puls, der mit 200 ms über der Entprellung liegt.
 
 ### 6.10 Scrollen — `ScrollJoystick`
 

@@ -90,17 +90,28 @@
 //
 // Immer gesendet, unabhaengig von der Gruppe: on, pose, dpose, tw, vbat.
 #define DEBUG_ALL       0
-#define DEBUG_PINCH     1   // env, gate, p_ml, click, gsum, nDeb, nGyro,
-                            // ei_err, ei_us
+#define DEBUG_PINCH     1   // env, envMax, gate, p_ml, click, gsum, nDeb,
+                            // nGyro, ei_err, ei_us
 #define DEBUG_POINT     2   // gx/gy/gz, rx, ry, pacc, accx, mvfail, twist,
-                            // elev, rtwist, level, srate, tg, tgr
+                            // elev, rtwist, level, pgate, srate, tg, tgr
 // DEBUG_ORIENT prueft die Einbaulage nach und steht bewusst neben DEBUG_ALL,
 // nicht darin: er teilt gx/gy/gz und twist/elev mit DEBUG_POINT, zusammen
 // kaemen diese Kanaele doppelt heraus.
 #define DEBUG_ORIENT    3   // ax/ay/az roh + gvx/gvy/gvz geglaettet,
                             // angX/angY/angZ, gx/gy/gz, twist, elev, rtwist,
                             // level
-#define DEBUG_SET       DEBUG_POINT
+
+// Ebenfalls neben DEBUG_ALL, weil er env/gate/click mit DEBUG_PINCH teilt.
+// Der schlanke Satz fuer die Messung des LOESE-Impulses: nur vier Kanaele,
+// damit die Serial-Last die Schleife nicht bremst - eine gedehnte Schleife
+// dehnt genau die Huellkurve, die gemessen werden soll.
+//
+// envMax ist der Spitzenwert seit der letzten Ausgabe. Ohne ihn waere die
+// Messung wertlos: die Schleife laeuft mit 209 Hz, die Ausgabe mit 50 Hz, und
+// ein env-Impuls (Zeitkonstante rund 10 ms) wuerde nur zufaellig auf seinem
+// Scheitel getroffen - die abgelesene Amplitude waere systematisch zu klein.
+#define DEBUG_ENV       4   // env, envMax, gate, click
+#define DEBUG_SET       DEBUG_ENV
 
 namespace cfg {
 
@@ -220,10 +231,14 @@ namespace cfg {
 //  6. Handhaltung  [auch in PoseTuning, lib/PoseDetector/]
 // =====================================================================
 //
-// Das Waagrecht-Gate entscheidet zuerst: ausserhalb gibt es nur Idle, egal wie
+// Ein Neigungs-Gate entscheidet zuerst: ausserhalb gibt es nur Idle, egal wie
 // die Hand steht. Erst innerhalb waehlt die geglaettete Verdrehung zwischen
 // Point und Turned. Idle ist also KEINE Zone der Verdrehung, sondern allein das
 // Ergebnis des Gates.
+//
+// Es gibt zwei solche Gates mit verschiedenen Aufgaben: das enge, symmetrische
+// LEVEL_MAX_DEG ist Voraussetzung der Ein/Aus-Drehgeste, das weite,
+// asymmetrische POSE_UP/DOWN entscheidet ueber Idle.
 
     // Verdrehung um die Unterarmachse (arm::twistDeg) in der Zeige-Haltung.
     // Fester Bezugspunkt statt einer Kalibrierung beim Einschalten: das Board
@@ -248,17 +263,45 @@ namespace cfg {
     constexpr float TURN_ON_DEG  = 70.f;       // Grad
     constexpr float TURN_OFF_DEG = 55.f;       // Grad
 
-    // Waagrecht-Bedingung. Haengt der Arm herunter oder ist er angehoben, ist
-    // keine der Haltungen gemeint. Absolut gegen die Schwerkraft gemessen und
-    // nicht relativ zum Einschalten: "waagrecht" soll waagrecht heissen, sonst
-    // kalibriert man sich die Bedingung beim Einschalten in einer schiefen
-    // Haltung gleich weg.
+    // Ein tieferer Scheitelwinkel als zweite Bedeutung derselben Ausdrehung
+    // (Ziehen) ist wieder ausgebaut: er lag auf derselben Achse wie Ein/Aus,
+    // und eine etwas zu weit geratene Schaltgeste wurde dadurch stillschweigend
+    // zum Ziehen - Ein/Aus verlor messbar an Zuverlaessigkeit. Das Ziehen haengt
+    // jetzt am Doppel-Pinch (DRAG_WINDOW_MS).
+
+    // Waagrecht-Bedingung der EIN/AUS-GESTE. Absolut gegen die Schwerkraft
+    // gemessen und nicht relativ zum Einschalten: "waagrecht" soll waagrecht
+    // heissen, sonst kalibriert man sich die Bedingung beim Einschalten in einer
+    // schiefen Haltung gleich weg.
     //
-    // Das Gate ist zugleich eine VORAUSSETZUNG der Drehgeste und keine
-    // Bequemlichkeit: bei senkrecht gehaltenem Unterarm ist die Verdrehung aus
-    // der Schwerkraft gar nicht beobachtbar.
-    constexpr float LEVEL_MAX_DEG  = 35.f;     // Grad
+    // Von 35 auf 50 Grad geweitet. 35 klang nach "waagrecht", war aber der
+    // haeufigste stille Killer der Ein/Aus-Geste: beim weiten Ausdrehen kippt
+    // der Unterarm mit, und reisst das Gate mitten in der Drehung, gilt die
+    // ganze Ausdrehung als verbraucht - ohne jeden Hinweis. Bei 50 Grad stehen
+    // immer noch 64 Prozent der Schwerkraft quer zur Armachse (cos 50 = 0.64),
+    // die Verdrehung bleibt also gut beobachtbar.
+    //
+    // Zaehler nTwLvl im Teleplot zeigt, wie oft das Gate noch zuschlaegt.
+    constexpr float LEVEL_MAX_DEG  = 50.f;     // Grad
     constexpr float LEVEL_HYST_DEG =  8.f;     // Grad
+
+    // Neigungs-Gate der HALTUNG. Beobachtbar ist die Verdrehung, solange die
+    // Schwerkraft eine Komponente quer zur Unterarmachse hat; deren Betrag ist
+    // sqrt(ux^2+uz^2) = cos(elev). Bei 35 Grad sind das noch 82 Prozent des
+    // Signals - viel zu frueh zum Aufgeben. Erst jenseits von rund 70 Grad wird
+    // atan2f(ux, uz) wirklich schlecht konditioniert.
+    //
+    // Asymmetrisch, weil die beiden Richtungen verschiedene Dinge bedeuten:
+    // nach oben zeigt und scrollt man (Scrollen HEISST den Arm neigen), nach
+    // unten haengt der Arm im Ruhezustand.
+    constexpr float POSE_UP_MAX_DEG   = 65.f;  // Grad
+    constexpr float POSE_DOWN_MAX_DEG = 35.f;  // Grad
+
+    // Im laufenden Scroll-Modus gilt das Gate nicht - sonst beendete das
+    // Scrollen sich selbst. Diese Schranke bleibt: so steil steht der Unterarm
+    // fast senkrecht, die Verdrehung ist nicht mehr beobachtbar, und die Haltung
+    // bliebe lieber stehen als auf einem Rauschwert umzuspringen.
+    constexpr float POSE_HOLD_MAX_DEG = 80.f;  // Grad
 
     // Der Modus folgt der gehaltenen Haltung, nicht den Ausschlaegen einer
     // schnellen Bewegung. MODE_TAU ist deutlich kuerzer als frueher (0.25 s):
@@ -410,6 +453,20 @@ namespace cfg {
     constexpr float ENV_ON  = 0.035f;          // g (Huellkurve)
     constexpr float ENV_OFF = 0.020f;          // g (Huellkurve)
 
+    // Eigene, HOEHERE Schwelle fuer den Abbruch der Ein/Aus-Drehgeste.
+    //
+    // Bisher brach ENV_ON sie ab, und das war der zweite stille Killer: eine
+    // zuegige 90-Grad-Drehung hebt die Huellkurve selbst ueber 0.035, ohne dass
+    // ein Pinch stattgefunden haette. Die Geste galt dann als verbraucht und
+    // schaltete nicht - ohne Hinweis. Echte Pinches liegen bei 0.045 bis 0.125,
+    // eine Schwelle knapp darunter trennt beides.
+    //
+    // Der Zweck des Abbruchs bleibt: ein vom Modell VERPASSTER Pinch waehrend
+    // der Ausdrehung darf beim Zurueckdrehen nicht die Maus abschalten. Deshalb
+    // haengt er weiter an der Huellkurve und nicht am erkannten Klick.
+    // Zaehler nTwCan im Teleplot zeigt, wie oft er noch greift.
+    constexpr float TWIST_CANCEL_ENV = 0.050f; // g (Huellkurve)
+
     // Erschuetterungen mitten in einer heftigen Bewegung sind kein Pinch,
     // sondern deren Nebenwirkung.
     //
@@ -420,8 +477,47 @@ namespace cfg {
     constexpr float    PINCH_GYRO_GUARD = 100.f;   // Grad/s
 
     // Kuerzester Abstand zweier gewerteter Pinches. Deckt das Nachschwingen
-    // eines Kontakts ab, ohne einen bewussten Doppelklick zu verschlucken.
-    constexpr uint32_t DEBOUNCE_MS = 180;      // ms
+    // eines Kontakts ab und sperrt den LOESE-Impuls aus, der sonst als zweiter
+    // Pinch gaelte - genau der war der Grund, warum frueher jeder Rechtsklick
+    // doppelt ausloeste.
+    constexpr uint32_t DEBOUNCE_MS = 200;      // ms
+
+    // Zusaetzliche Sperre nach einem RECHTSKLICK - der bleibt ein ganzer Klick
+    // und nimmt am Doppel-Pinch nicht teil. Ohne sie schliesst der Loese-Impuls
+    // des Fingers das eben geoeffnete Kontextmenue wieder.
+    constexpr uint32_t RIGHT_CLICK_HOLDOFF_MS = 700;   // ms
+
+    // Klick oder Ziehen entscheidet die BEWEGUNG. Nach dem Pinch bleibt die
+    // Taste unten; bewegt sich der Cursor um mehr als DRAG_MOVE_PX, ist es ein
+    // Ziehen, sonst geht sie nach DRAG_WINDOW_MS wieder hoch.
+    //
+    // Der DRUCK kommt sofort - das Fenster verzoegert nur das Loslassen. Genau
+    // daran scheiterten die frueheren Doppel-Pinch-Entwuerfe: sie verzoegerten
+    // den ganzen Klick, und man musste zusaetzlich ein Zeitband treffen.
+    //
+    // Der Weg wird als Summe der Betraege gezaehlt, nicht als Verschiebung: ein
+    // Hin und Her waere sonst null, obwohl die Hand deutlich gezogen hat.
+    // Waehrend der Erschuetterung selbst steht der Zeiger ohnehin still
+    // (PinchDetector::inFreeze), das Zittern des Klicks zaehlt also nicht mit.
+    //
+    // 12 px ist rund ein Zehntel Grad Armbewegung bei SENS_X = 110 px/Grad -
+    // klar mehr als Handzittern, klar weniger als eine gemeinte Bewegung.
+    constexpr float    DRAG_MOVE_PX   = 12.f;  // px, Summe der Betraege
+    constexpr uint32_t DRAG_WINDOW_MS = 350;   // ms
+
+    // Zwei Sicherungen dagegen, dass die Taste stillschweigend haengt.
+    //
+    // Die Zwangsfreigabe ist die Notbremse: eine gehaltene Taste, die nur der
+    // Nutzer wieder loesen kann, macht den Rechner unbenutzbar, wenn die
+    // Loesegeste einmal nicht erkannt wird. 30 s sind laenger als jedes
+    // vernuenftige Ziehen und kurz genug, um nicht zu stoeren.
+    constexpr uint32_t DRAG_MAX_MS    = 30000;  // ms
+
+    // Erinnerungsimpuls, damit ein laufendes Ziehen nie unbemerkt bleibt.
+    // Danach sperrt der Controller die Klickerkennung kurz - sonst laese sie die
+    // eigene Vibration als Pinch und beendete das Ziehen, das sie meldet.
+    constexpr uint32_t DRAG_REMIND_MS      = 2000;  // ms
+    constexpr uint32_t DRAG_REMIND_BLIND_MS = 200;  // ms Sperre nach dem Impuls
 
     // Obergrenze fuer das Einfrieren des Cursors nach einem Klick. Frueher war
     // das eine feste Zeit von 120 ms - der Cursor stand also nach jedem Klick,
@@ -465,13 +561,20 @@ namespace cfg {
 // =====================================================================
 //
 // Der Vibrationsmotor wird REIN DIGITAL geschaltet, nicht per PWM: er kennt nur
-// an und aus. Die Information steckt allein in der ANZAHL der Impulse -
-// ein Impuls fuer Linksklick, Haltungswechsel und Ein/Aus, zwei fuer den
-// Rechtsklick, der in einer Haltung passiert, in der man den Cursor nicht
-// sieht.
+// an und aus. Die Information steckt in der ANZAHL der Impulse und in ihrer
+// DAUER:
+//
+//   1 kurz  Linksklick, Haltungswechsel
+//   2 kurz  Rechtsklick - er passiert in einer Haltung, in der man den Cursor
+//           nicht sieht
+//   3 kurz  Ziehen an oder aus - der Cursor ist sichtbar, der Tastenzustand nicht
+//   1 lang  Ein/Aus - das einzige Ereignis, nach dem gar nichts mehr geht.
+//           Ein langer Puls hebt sich sauberer ab als jede Anzahl kurzer, die
+//           bei vier Impulsen ohnehin zu einem Brummen verschmelzen.
 
     constexpr int      HAPTIC_PIN = D1;        // digitaler Ausgang, aktiv HIGH
     constexpr uint32_t HAPTIC_MS  = 40;        // ms Impulsdauer
+    constexpr uint32_t HAPTIC_LONG_MS = 200;   // ms, Ein/Aus
 
     // Luecke zwischen zwei Impulsen DESSELBEN Musters. Perzeptiv begruendet:
     // zwei Buzz muessen als getrennt spuerbar bleiben, nicht als ein langer.

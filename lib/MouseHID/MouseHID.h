@@ -42,6 +42,11 @@ public:
     void scroll(int8_t ticks)       { blehid.mouseScroll(ticks); }
     bool move(int8_t dx, int8_t dy) { return blehid.mouseMove(dx, dy); }
 
+    // Fuer das Ziehen: die Bibliothek merkt sich die Tastenmaske und traegt sie
+    // in jeden folgenden mouseMove-Bericht mit - mehr braucht es dafuer nicht.
+    void pressLeft()  { blehid.mouseButtonPress(MOUSE_BUTTON_LEFT); }
+    void releaseAll() { blehid.mouseButtonRelease(); }
+
     // Im Ruhezustand ist der Funk der groesste verbleibende Verbraucher.
     //
     // Zuerst die Selbstwiederbelebung abschalten: sonst startet die SoftDevice
@@ -95,6 +100,9 @@ public:
     void scroll(int8_t ticks)       { hid_.mouseScroll(0, ticks, 0); }
     bool move(int8_t dx, int8_t dy) { return hid_.mouseMove(0, dx, dy); }
 
+    void pressLeft()  { hid_.mouseButtonPress(0, MOUSE_BUTTON_LEFT); }
+    void releaseAll() { hid_.mouseButtonRelease(0); }
+
     // Ueber USB gibt es keinen Funk: das Geraet haengt an einer Stromquelle,
     // und ein Abschalten wuerde die Enumeration abwerfen. Leer statt eines #if
     // an der Aufrufstelle - bei Strommessungen aber beachten.
@@ -114,6 +122,10 @@ static_assert(std::is_same<decltype(&MouseHID::click),      void (MouseHID::*)()
               "MouseHID::click() hat die falsche Signatur");
 static_assert(std::is_same<decltype(&MouseHID::rightClick), void (MouseHID::*)()>::value,
               "MouseHID::rightClick() hat die falsche Signatur");
+static_assert(std::is_same<decltype(&MouseHID::pressLeft),  void (MouseHID::*)()>::value,
+              "MouseHID::pressLeft() hat die falsche Signatur");
+static_assert(std::is_same<decltype(&MouseHID::releaseAll), void (MouseHID::*)()>::value,
+              "MouseHID::releaseAll() hat die falsche Signatur");
 static_assert(std::is_same<decltype(&MouseHID::scroll),  void (MouseHID::*)(int8_t)>::value,
               "MouseHID::scroll() hat die falsche Signatur");
 static_assert(std::is_same<decltype(&MouseHID::move),    bool (MouseHID::*)(int8_t, int8_t)>::value,

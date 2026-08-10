@@ -19,10 +19,15 @@ public:
         digitalWrite(cfg::HAPTIC_PIN, LOW);
     }
 
-    void trigger(uint32_t now_ms, uint8_t pulses = 1) {
+    // pulseMs: Dauer eines einzelnen Impulses. Ein/Aus benutzt einen langen,
+    // damit es sich von jedem Klickmuster abhebt, ohne dass die Anzahl der
+    // Impulse wachsen muss - vier kurze verschmelzen ohnehin zu einem Brummen.
+    void trigger(uint32_t now_ms, uint8_t pulses = 1,
+                 uint32_t pulseMs = cfg::HAPTIC_MS) {
         if (pulses == 0) return;
         if (busy_) return;
         if (everRun_ && now_ms - tFree_ < cfg::HAPTIC_REST_MS) return;
+        pulseMs_ = pulseMs;
         left_  = pulses;
         busy_  = true;
         everRun_ = true;
@@ -34,7 +39,7 @@ public:
     void update(uint32_t now_ms) {
         if (!busy_) return;
         if (on_) {
-            if (now_ms - tStep_ < cfg::HAPTIC_MS) return;
+            if (now_ms - tStep_ < pulseMs_) return;
             digitalWrite(cfg::HAPTIC_PIN, LOW);
             on_    = false;
             tStep_ = now_ms;
@@ -52,6 +57,7 @@ private:
     bool     on_      = false;
     bool     everRun_ = false;   // sonst greift die Ruhezeit schon beim ersten Mal
     uint8_t  left_    = 0;
+    uint32_t pulseMs_ = cfg::HAPTIC_MS;
     uint32_t tStep_   = 0;
     uint32_t tFree_   = 0;
 };

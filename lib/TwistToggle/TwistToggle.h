@@ -9,6 +9,11 @@
 //   raus, Erschuetterung dazwischen (cancel())        -> nichts, das war ein Pinch
 //   raus und laenger als maxMs gehalten               -> Held (Scroll-Modus)
 //
+// Eine vierte Bedeutung ueber einen tieferen Scheitelwinkel (Ziehen) ist wieder
+// ausgebaut worden: sie lag auf derselben Achse wie Ein/Aus, und eine etwas zu
+// weit geratene Schaltgeste wurde dadurch stillschweigend zum Ziehen. Das
+// Ziehen haengt jetzt am Doppel-Pinch, siehe AirMouseState.
+//
 // Der Winkel kommt aus der Lageschaetzung und ist damit absolut; aus der
 // Drehrate integriert wuerde die Referenz wegdriften. Kehrseite: bei senkrecht
 // gehaltenem Unterarm ist die Verdrehung aus der Schwerkraft nicht beobachtbar,
@@ -18,7 +23,11 @@
 struct TwistTuning {
     float    onDeg     =  70.f;   // ab hier gilt der Arm als abgedreht
     float    backDeg   =  30.f;   // erst hier gilt er wieder als gerade
-    uint32_t maxMs     = 1000;    // laenger draussen = keine Schaltgeste mehr
+    // Laenger draussen = keine Schaltgeste mehr, sondern der Scroll-Modus.
+    // 1000 ms waren zu knapp: eine bewusst gefuehrte Drehung raus UND zurueck
+    // braucht mehr, und wer sie verfehlt, bekommt keinen Hinweis - die Geste
+    // faellt lautlos aus.
+    uint32_t maxMs     = 1300;
     uint32_t lockoutMs =  800;    // Ruhe nach einem Schaltvorgang
 };
 
@@ -45,6 +54,10 @@ public:
         }
 
         if (!level) {
+            // Zaehlen, damit eine hier verschluckte Geste im Teleplot sichtbar
+            // wird: sie scheitert sonst lautlos und sieht wie Unzuverlaessigkeit
+            // aus. Gleiches Muster wie die Zaehler in PinchDetector.
+            if (out_ && !used_) nNotLevel_++;
             out_  = false;
             used_ = true;
             return TwistEvent::None;
@@ -68,6 +81,8 @@ public:
                 locked_  = true;
                 return TwistEvent::Toggle;
             }
+            if (used_)       nCancelled_++;
+            else if (!quick && !held_) nTooSlow_++;
             return TwistEvent::None;
         }
 
@@ -90,6 +105,12 @@ public:
         return used_ ? 2 : 1;
     }
 
+    // Warum eine Ausdrehung nicht geschaltet hat. Ohne diese Zaehler scheitert
+    // die Geste lautlos und ist von Unzuverlaessigkeit nicht zu unterscheiden.
+    uint16_t rejectedByCancel() const { return nCancelled_; }
+    uint16_t rejectedByLevel()  const { return nNotLevel_; }
+    uint16_t rejectedByTime()   const { return nTooSlow_; }
+
 private:
     TwistTuning t_;
     bool     out_     = false;   // gerade ausgedreht
@@ -98,4 +119,7 @@ private:
     bool     locked_  = false;
     uint32_t tOut_    = 0;
     uint32_t tToggle_ = 0;
+    uint16_t nCancelled_ = 0;
+    uint16_t nNotLevel_  = 0;
+    uint16_t nTooSlow_   = 0;
 };

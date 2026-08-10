@@ -96,6 +96,115 @@ unruhigsten Moment genommen werden. Taugt als Beispiel für Kap. 6.
   entscheiden (Casiez et al. 2008: zu niedrig schadet klar, zu hoch kaum).
 - [ ] **`mvfail`** beobachten – steigt der Zähler, gehen Pakete an BLE verloren.
 
+## ERLEDIGT: Löse-Impuls gemessen — taugt nicht
+
+**Befund:** eine zweite Spitze gibt es *teilweise*, bei **kurzem Pinch gar nicht**, und sie
+liegt **kaum über dem Rauschen**.
+
+**Folge:** Apples „pinch and move" mit dem Loslassen als Ende ist auf dieser Hardware nicht
+umsetzbar — ein Tastenzustand, dessen Ende in der Hälfte der Fälle ausbleibt, ergibt eine
+klebende Taste. Ebenso erledigt ist der lange Pinch als Rechtsklick (er müsste „gehalten"
+aus dem Ausbleiben des Löse-Impulses erschliessen).
+
+**Was daraus gebaut wurde:** der Anfang der Geste braucht das Lösen nicht. Pinch drückt die
+Taste sofort; bewegt sich der Cursor um mehr als `DRAG_MOVE_PX`, wird daraus ein Ziehen,
+sonst geht die Taste nach `DRAG_WINDOW_MS` wieder hoch. Beendet wird das Ziehen mit einem
+zweiten Pinch. Der Doppel-Pinch als *Auslöser* ist damit weg, und mit ihm sein Zeitband.
+
+- [ ] `DRAG_MOVE_PX` (12 px) am Gerät einstellen: zu klein → ungewolltes Ziehen beim
+  Klicken, zu gross → Ziehen kommt nicht zustande. Kanal `drag` beim gewöhnlichen Klicken
+  beobachten, er muss auf 0 bleiben.
+- [ ] Für die Arbeit festhalten: negatives Messergebnis, das eine Entwurfsfrage entschieden
+  hat — und die Erklärung, warum Doublepoint für dieselbe Funktion PPG verbaut.
+
+## Messprotokoll des Versuchs (zur Dokumentation)
+
+`DEBUG_SET` steht auf **`DEBUG_ENV`** — vier Kanäle: `env`, `envMax`, `gate`, `click`.
+`envMax` ist der Spitzenwert seit der letzten Ausgabe und der eigentliche Messwert: die
+Schleife läuft mit 209 Hz, die Ausgabe mit 50 Hz, ein env-Impuls (Zeitkonstante ~10 ms)
+träfe seinen Scheitel sonst nur zufällig.
+
+**Versuch:** Pinch bewusst eine volle Sekunde geschlossen halten, dann die Finger öffnen.
+Die Haptik ist nach spätestens 160 ms vorbei — jede Spitze bei t ≈ 1000 ms kann deshalb
+nur das Lösen sein. Das trennt den Löse-Impuls sauber von der Vibration, die bisher als
+Erklärung für den doppelten Rechtsklick ebenso in Frage kam.
+
+- [ ] **Gibt es die zweite Spitze überhaupt?** Nein → „pinch and move" fällt, das Ziehen
+  braucht wieder eine zweite Geste.
+- [ ] **Wie hoch ist `envMax` beim Lösen?** Kontakt liegt bei 0.045–0.125, Untergrund bei
+  0.005–0.02. Liegt das Lösen dazwischen, braucht es eine eigene, tiefere Schwelle
+  (`RELEASE_ENV`) — mit `ENV_ON` = 0.035 würde es sonst teilweise übersehen.
+- [ ] **Streuung über 20 Wiederholungen.** Daran hängt zugleich, ob der lange Pinch als
+  Rechtsklick taugt (siehe `docs/Bedienkonzept.md`, Stufe 2c).
+- [ ] Gegenprobe mit einem *kurzen*, normalen Klick: wo landet der Löse-Impuls zeitlich
+  relativ zum Kontakt? Das ist die Zahl, die `DEBOUNCE_MS` festlegt.
+
+## OFFEN: Scroll-Achse am Geraet nachpruefen (Achsen scheinen vertauscht)
+
+Beobachtung: im Scroll-Modus reagiert es auf Bewegung nach links/rechts statt auf
+hoch/runter. Die Rechnung sagt das Gegenteil — `arm::elevDeg` liest `uy`, die Komponente
+entlang der Unterarmachse, und `test_arm_orientation` prüft ausdrücklich nach, dass diese
+Zahl auch bei 90° verdrehter Hand die Armneigung bleibt (Prüfung „Kreuzprodukt beider
+Winkel"). Eine Drehung um die Hochachse (links/rechts) lässt `uy` unverändert.
+
+Die Achse deshalb **nicht** blind tauschen — das bräche eine geprüfte Eigenschaft. Zuerst
+messen (`DEBUG_SET = DEBUG_POINT`, Kanäle `elev`, `srate`, `pose`, `dpose`):
+
+- [ ] Scroll-Modus betreten (ausdrehen, halten). Steht `dpose` auf 2 und läuft `srate`
+  überhaupt? Wird der Modus gar nicht betreten, ist das das eigentliche Problem und die
+  „Achse" nur das, was der Cursor stattdessen tut.
+- [ ] Im Scroll-Modus den Unterarm **hoch/runter** neigen: `elev` muss sich ändern,
+  `srate` anlaufen. Tut es das nicht, stimmt die Achse wirklich nicht.
+- [ ] Im Scroll-Modus den Arm **links/rechts** schwenken: `elev` muss stehen bleiben.
+  Ändert es sich, ist die Einbaulage anders als angenommen — dann gehört
+  `DEBUG_SET = DEBUG_ORIENT` dazu (`angX/angY/angZ` gegen `twist`/`elev` halten), und
+  erst danach wird an `ArmOrientation` etwas geändert.
+
+## DRINGEND: das Fenster des Doppel-Pinch einstellen
+
+Ziehen und Klick teilen sich einen Pfad: der Pinch drückt sofort, ein zweiter innerhalb
+`DRAG_WINDOW_MS` macht daraus ein Ziehen. Das nutzbare Band ist `DEBOUNCE_MS` (200) bis
+`DRAG_WINDOW_MS` (350) — beide Zahlen gehören **zusammen** eingestellt.
+
+- [ ] **Der kritische Fall: löst der eigene Löse-Impuls ein Ziehen aus?** Hält man den
+  Pinch länger als 200 ms geschlossen, fällt der Impuls beim Öffnen der Finger ins Fenster
+  und verriegelt ein Ziehen, das niemand wollte. Kanal `drag` beim **gewöhnlichen**
+  Klicken beobachten: er muss auf 0 bleiben. Springt er, `DEBOUNCE_MS` anheben (und
+  `DRAG_WINDOW_MS` mit, das Band muss ≥ 100 ms bleiben — ein `static_assert` wacht darüber).
+- [ ] **Trifft man das Ziehen?** Zweimal zügig pinchen, `drag` muss auf 1 gehen. Klappt es
+  selten, ist das Band zu schmal: `DRAG_WINDOW_MS` erhöhen. Preis ist, dass jeder
+  gewöhnliche Klick später *loslässt* (der Druck kommt weiterhin sofort).
+- [ ] **Fühlt sich der Klick noch richtig an?** 350 ms zwischen Druck und Loslassen sind
+  spürbar. Falls störend: `DRAG_WINDOW_MS` senken und die Trefferquote gegenhalten.
+- [ ] **Doppelklick:** er ist durch diesen Entwurf grösstenteils aufgegeben — zwei schnelle
+  Pinches heissen jetzt Ziehen. Übrig bleibt das schmale Band 350–500 ms. Am Kanal
+  `nClick` prüfen, wie zuverlässig das ist, und für die Arbeit als bewusster Zielkonflikt
+  notieren.
+
+## Offen: Ziehen und Haptik am Gerät prüfen
+
+Neue Teleplot-Kanäle: `drag` (0/1) und `nClick` (Zähler). Der Zähler ist nötig, weil
+`click` bis zur nächsten Debug-Ausgabe latcht.
+
+- [ ] **Ziehen:** zweimal zügig pinchen (drei Haptik-Impulse, `drag` auf 1), Text
+  markieren, einmal pinchen zum Fallenlassen. Der Cursor muss während des Ziehens normal
+  laufen.
+- [ ] **Ein/Aus ist wieder zuverlässig?** Der tiefe Scheitelwinkel ist ausgebaut, die
+  Drehachse hat wieder nur eine Bedeutung über 70°. Das war die Ursache dafür, dass Ein/Aus
+  zwischenzeitlich aussetzte — gegenprüfen, dass es weg ist.
+- [ ] **Der lange Ein/Aus-Puls** (200 ms) muss sich klar von jedem Klickmuster abheben und
+  darf **nicht** selbst als Pinch gelesen werden — nach dem Einschalten sperrt der
+  Controller die Klickerkennung dafür kurz. Kanal `drag`/`nClick` direkt nach dem
+  Einschalten beobachten.
+- [ ] **Die drei Sicherungen einzeln auslösen** — Ausschalten während des Ziehens, Arm
+  abdrehen während des Ziehens, Pinch während des Ziehens. In allen drei Fällen muss die
+  Taste nachweislich frei sein (die Textmarkierung endet).
+- [ ] **Zwangsfreigabe:** 30 s ziehen lassen, ohne die Maus zu bewegen (`DRAG_MAX_MS`).
+- [ ] **Erinnerungsimpuls:** brummt alle 2 s und beendet dabei **nicht** das Ziehen — die
+  Sperre `DRAG_REMIND_BLIND_MS` muss die eigene Vibration abfangen.
+- [ ] Alle Messungen mit `USE_BLE_HID true`: die gehaltene Tastenmaske über BLE ist der
+  Pfad, der wirklich benutzt wird.
+
 ## Messungen am Gerät (Firmware ist dafür bereit)
 Die Teleplot-Ausgabe in `AirMouseController::debug()` ist in Sätze aufgeteilt
 (`DEBUG_SET` in `config.h`): immer `on`/`pose`/`tw`, dazu `DEBUG_PINCH`
