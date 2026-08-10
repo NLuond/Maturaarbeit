@@ -1,131 +1,128 @@
 #pragma once
-#include <Arduino.h>
+#include <stdint.h>
 #include <math.h>
-#include "config.h"
 #include "AirMouseState.h"
 
-// Bildet Verdrehung und Armneigung auf eine Haltung ab. Liefert nur das
-// Ergebnis - was daraus folgt, entscheidet der Zustandsautomat.
+// Bildet Verdrehung und Armneigung auf eine Haltung ab:
 //
-//   Point  - Hand gerade gehalten, Cursor folgt der Bewegung.
-//   Idle   - abgedreht oder Arm nicht waagrecht. Nichts passiert.
-//   Turned - nach aussen gedreht, Neigung wirkt wie ein Joystick.
+//   Point  - Hand gerade gehalten.
+//   Idle   - Arm nicht waagrecht. Ergebnis allein des Waagrecht-Gates,
+//            keine Zone der Verdrehung.
+//   Turned - Hand abgedreht. Der Scroll-Joystick kommt nicht mit dieser
+//            Haltung, sondern erst ueber AirMouseState::onTwistHeld().
 //
-// Beide Winkel haben einen festen Bezug, keinen aus der laufenden Sitzung:
-//
-//   twist  gegen cfg::TWIST_NEUTRAL_DEG. Das Board sitzt immer gleich am Arm,
-//          der Nullpunkt ist damit eine Eigenschaft der Bauform.
-//   elev   gegen die Waagerechte. "Waagrecht" ist eine Aussage ueber den Raum,
-//          nicht ueber die Einschalthaltung - relativ gemessen koennte man die
-//          Bedingung durch Einschalten mit haengendem Arm aushebeln.
+// Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft; die Werte stehen
+// in PoseTuning und sind per static_assert an cfg:: gebunden.
+struct PoseTuning {
+    float    twistNeutralDeg =  0.f;   // Bezugspunkt der Verdrehung, Grad
+    float    turnOnDeg       = 70.f;   // ab hier gilt die Hand als abgedreht
+    float    turnOffDeg      = 55.f;   // erst hier wieder als gerade
+
+    float    levelMaxDeg     = 35.f;   // Waagrecht-Gate, Grad
+    float    levelHystDeg    =  8.f;
+
+    float    modeTau         = 0.10f;  // Glaettung fuer Haltung und Geste, s
+    float    rollCompTau     = 0.25f;  // langsamere Fassung fuer den Zeiger, s
+
+    uint32_t dwellMs         = 150;    // Haltezeit vor einem Wechsel
+
+    float    stillDps        = 300.f;  // darueber wird nicht entschieden
+    uint32_t calmMs          = 250;    // Ruhezeit danach
+
+    // Aus: dauerhaft Point. Die Winkel laufen weiter mit - die Ein/Aus-Geste
+    // liest relTwistDeg() und level() direkt und muss auch dann funktionieren.
+    bool     classify        = true;
+};
+
 class PoseDetector {
 public:
-    // Setzt beim Einschalten nur die Haltung zurueck - der Nullpunkt der
-    // Verdrehung ist fest (cfg::TWIST_NEUTRAL_DEG) und wird hier bewusst nicht
-    // angefasst. Frueher wurde er hier auf die aktuelle Lage kalibriert; das
-    // geschieht unmittelbar nach dem Schuetteln, wenn die Lageschaetzung von
-    // der Schuettelbewegung am staerksten gestoert ist, und ergab bei jedem
-    // Einschalten einen anderen Bezugspunkt. Ein Winkel, der ueber Minuten
-    // gilt, darf nicht aus dem unruhigsten Moment stammen.
+    explicit PoseDetector(const PoseTuning& t = PoseTuning()) : t_(t) {}
+
+    // Setzt nur die Haltung zurueck. Der Nullpunkt der Verdrehung ist fest.
     void reset() {
         pose_    = Pose::Point;
         pending_ = Pose::Point;
     }
 
     Pose update(float twistDeg, float elevDeg, float gyroSum, float dt, uint32_t now_ms) {
-        // Erst glaetten: beide Winkel schwanken beim normalen Zeigen um mehrere
-        // zehn Grad, teils weil das Handgelenk mitdreht, teils weil Madgwick bei
-        // schnellen Bewegungen von der Linearbeschleunigung gestoert wird. Ohne
-        // Glaettung wuerde die Haltung mitten in der Bewegung umspringen.
-        //
-        // Das laeuft unabhaengig von USE_POSE_MODE: TwistToggle liest
-        // relTwistDeg() direkt, ohne ueber die Klassifikation unten zu gehen.
-        // Wuerden die Winkel hier auf null gehalten, saehe die Ein/Aus-Geste die
-        // Drehung nie - "Haltungserkennung aus" darf nur heissen, dass die
-        // KLASSIFIKATION dauerhaft Point liefert, nicht dass die Winkelplumbing
-        // stillsteht.
-        const float a = 1.f - expf(-dt / cfg::MODE_TAU);
-        fTwist_ = wrapDeg(fTwist_ + a * wrapDeg(twistDeg - fTwist_));
-        fElev_ += a * (elevDeg - fElev_);
-        rel_    = wrapDeg(fTwist_ - cfg::TWIST_NEUTRAL_DEG);
+        smoothAngles(twistDeg, elevDeg, dt);
+        updateLevelGate();
 
-        // Zweite, langsamere Glaettung fuer die Roll-Kompensation. Sie laeuft
-        // auch waehrend der Bewegungssperre weiter, wie die uebrigen Winkel.
-        const float aSlow = 1.f - expf(-dt / cfg::ROLLCOMP_TAU);
-        fTwistSlow_ = wrapDeg(fTwistSlow_ + aSlow * wrapDeg(twistDeg - fTwistSlow_));
-        relSlow_    = wrapDeg(fTwistSlow_ - cfg::TWIST_NEUTRAL_DEG);
+        if (!t_.classify) return pose_ = Pose::Point;
 
-        // Waagrecht-Gate mit eigener Hysterese, sonst flattert es genau an der
-        // Schwelle - und ein Flattern hier wuerde die ganze Haltung mitreissen.
-        // Auch dieses Gate bleibt in Betrieb: TwistToggle bekommt level() als
-        // zweite Bedingung, unabhaengig von USE_POSE_MODE.
-        const float tilt = fabsf(fElev_);
-        if (level_) { if (tilt > cfg::LEVEL_MAX_DEG)                          level_ = false; }
-        else        { if (tilt < cfg::LEVEL_MAX_DEG - cfg::LEVEL_HYST_DEG)    level_ = true;  }
-
-    #if !USE_POSE_MODE
-        (void)gyroSum; (void)now_ms;
-        return pose_ = Pose::Point;
-    #else
-        // Waehrend einer heftigen Bewegung bleibt die Haltung stehen. Die
-        // Winkel oben laufen weiter mit - nur entschieden wird nichts. Eine
-        // gehaltene Haltung ist per Definition nichts, was man mitten im
-        // Schwung einnimmt, und die zuegige Ein/Aus-Drehung (TwistToggle)
-        // reisst die Erkennung sonst durch Idle bis Turned.
-        if (gyroSum > cfg::POSE_STILL_DPS) tMoving_ = now_ms;
-        if (now_ms - tMoving_ < cfg::POSE_CALM_MS) {
-            // Haltezeit neu anlaufen lassen, sonst waere sie in dem Moment,
-            // in dem die Bewegung aufhoert, schon halb abgelaufen.
+        // Waehrend einer heftigen Bewegung bleibt die Haltung stehen; die
+        // Winkel oben laufen weiter.
+        if (gyroSum > t_.stillDps) tMoving_ = now_ms;
+        if (now_ms - tMoving_ < t_.calmMs) {
+            // Haltezeit neu anlaufen lassen, sonst waere sie beim Ende der
+            // Bewegung schon halb abgelaufen.
             pending_  = pose_;
             tPending_ = now_ms;
             return pose_;
         }
 
-        // Dann halten: ein Wechsel zaehlt erst, wenn er kurz stabil anliegt.
-        // Das gilt auch fuer das Gate - ein kurzes Durchschwingen des Arms beim
-        // Zeigen darf die Maus nicht abschalten.
-        const Pose want = level_ ? classify() : Pose::Idle;
-        if (want == pose_) {
-            pending_ = pose_;
-        } else if (want != pending_) {
-            pending_  = want;
-            tPending_ = now_ms;
-        } else if (now_ms - tPending_ >= cfg::MODE_DWELL_MS) {
-            pose_ = want;
-        }
-        return pose_;
-    #endif
+        return settle(level_ ? classify() : Pose::Idle, now_ms);
     }
 
-    Pose  pose()         const { return pose_; }
-    float relTwistDeg()  const { return rel_; }
-    float relTwistSlow() const { return relSlow_; }
-    float elevDeg()      const { return fElev_; }
-    bool  level()        const { return level_; }
+    Pose  pose()            const { return pose_; }
+    float relTwistDeg()     const { return rel_; }
+    float relTwistSlowDeg() const { return relSlow_; }
+    bool  level()           const { return level_; }
 
 private:
+    PoseTuning t_;
     float    fTwist_     = 0.f;
     float    fElev_      = 0.f;
     float    rel_        = 0.f;
     float    fTwistSlow_ = 0.f;
     float    relSlow_    = 0.f;
-    bool     level_    = true;
-    Pose     pose_     = Pose::Point;
-    Pose     pending_  = Pose::Point;
-    uint32_t tPending_ = 0;
-    uint32_t tMoving_  = 0;
+    bool     level_      = true;
+    Pose     pose_       = Pose::Point;
+    Pose     pending_    = Pose::Point;
+    uint32_t tPending_   = 0;
+    uint32_t tMoving_    = 0;
 
-    // Nur noch zwei Zonen auf der Verdrehachse, mit Hysterese. Idle taucht
-    // hier nicht auf: es ist keine Zone der Verdrehung mehr, sondern das
-    // Ergebnis des Waagrecht-Gates in update().
+    // Beide Winkel schwanken beim normalen Zeigen um mehrere zehn Grad. Die
+    // zweite, langsamere Verdrehung geht in die Drehmatrix des Zeigers, wo
+    // Rauschen unmittelbar als Zittern im Cursor landet.
+    void smoothAngles(float twistDeg, float elevDeg, float dt) {
+        const float a = 1.f - expf(-dt / t_.modeTau);
+        fTwist_ = wrapDeg(fTwist_ + a * wrapDeg(twistDeg - fTwist_));
+        fElev_ += a * (elevDeg - fElev_);
+        rel_    = wrapDeg(fTwist_ - t_.twistNeutralDeg);
+
+        const float aSlow = 1.f - expf(-dt / t_.rollCompTau);
+        fTwistSlow_ = wrapDeg(fTwistSlow_ + aSlow * wrapDeg(twistDeg - fTwistSlow_));
+        relSlow_    = wrapDeg(fTwistSlow_ - t_.twistNeutralDeg);
+    }
+
+    void updateLevelGate() {
+        const float tilt = fabsf(fElev_);
+        if (level_) { if (tilt > t_.levelMaxDeg)                    level_ = false; }
+        else        { if (tilt < t_.levelMaxDeg - t_.levelHystDeg)  level_ = true;  }
+    }
+
+    // Ein Wechsel zaehlt erst, wenn er dwellMs stabil anliegt.
+    Pose settle(Pose want, uint32_t now_ms) {
+        if (want == pose_) {
+            pending_ = pose_;
+        } else if (want != pending_) {
+            pending_  = want;
+            tPending_ = now_ms;
+        } else if (now_ms - tPending_ >= t_.dwellMs) {
+            pose_ = want;
+        }
+        return pose_;
+    }
+
+    // Nur zwei Zonen, mit Hysterese, verglichen wird der Betrag: turnOnDeg ist
+    // anatomisch ohnehin nur in einer Drehrichtung erreichbar.
     Pose classify() const {
         const float tilt = fabsf(rel_);
         if (pose_ == Pose::Turned) {
-            return (tilt < cfg::TURN_OFF_DEG) ? Pose::Point : Pose::Turned;
+            return (tilt < t_.turnOffDeg) ? Pose::Point : Pose::Turned;
         }
-        // Deckt Point und Idle ab: aus beiden fuehrt derselbe Eintrittspunkt
-        // nach Turned.
-        return (tilt > cfg::TURN_ON_DEG) ? Pose::Turned : Pose::Point;
+        return (tilt > t_.turnOnDeg) ? Pose::Turned : Pose::Point;
     }
 
     static float wrapDeg(float a) {

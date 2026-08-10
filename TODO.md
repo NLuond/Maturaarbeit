@@ -52,7 +52,7 @@ gegenüber dem, was die Namen nahelegen. Folgen:
 
 **Behoben.** `rollDeg()`/`pitchDeg()` sind aus `MadgwickAHRS` entfernt (sie laden zum
 selben Fehler ein), stattdessen `upX/upY/upZ`. `lib/ArmOrientation/` benennt daraus
-`twistDeg` und `elevDeg`. PC-Test: `test/test_arm_orientation.cpp`, 281 Prüfungen.
+`twistDeg` und `elevDeg`. PC-Test: `test/test_arm_orientation/test_arm_orientation.cpp`, 281 Prüfungen.
 
 **Neu: Waagrecht-Bedingung.** `PoseDetector` liefert nur noch `Idle`, solange
 `|elev| > LEVEL_MAX_DEG` (35 °, Hysterese 8 °). Absolut gemessen, nicht relativ zum
@@ -143,10 +143,10 @@ Faktor ~2 zeitgedehnt.
 `lib/AirMouseState/AirMouseState.h` – zwei Achsen (Power / Pose), alle Übergänge
 in einer Tabelle, keine Zustandsbits mehr im Controller verstreut. Keine
 `Grab`-Achse, siehe `CLAUDE.md`.
-Test: `test/test_state_machine.cpp`, läuft auf dem PC, Kriterium `0 Fehler`.
+Test: `test/test_state_machine/test_state_machine.cpp`, läuft auf dem PC, Kriterium `0 Fehler`.
 
 ```bash
-g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o build/fsm.exe test/test_state_machine.cpp && ./build/fsm.exe
+g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP/fsm.exe" test/test_state_machine/test_state_machine.cpp
 ```
 
 - [ ] **Am Gerät gegenprüfen:** Kanäle `on`, `pose` (0=Point, 1=Idle, 2=Turned)

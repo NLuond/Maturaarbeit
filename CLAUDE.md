@@ -22,45 +22,53 @@ Der Build ist wegen des Edge-Impulse-SDK langsam und **sehr** gespraechig; Ausga
 (`2>&1 | Select-Object -Last 20`). Interessant ist nur die RAM/Flash-Zeile und `SUCCESS`.
 
 Zustandsautomat, Winkel-Ableitung und die anderen hardwarefreien Module werden auf dem PC
-getestet, nicht auf dem Chip (`g++` liegt unter `C:\Strawberry\c\bin`):
+getestet, nicht auf dem Chip. Alle zehn auf einmal:
 
 ```powershell
-g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine.cpp
-& "$env:TEMP\fsm.exe"
-
-g++ -std=c++14 -Wall -Wextra -I lib/ArmOrientation -o "$env:TEMP\arm.exe" test/test_arm_orientation.cpp
-& "$env:TEMP\arm.exe"
-
-g++ -std=c++14 -Wall -Wextra -I lib/TwistToggle -o "$env:TEMP\twist.exe" test/test_twist_toggle.cpp
-& "$env:TEMP\twist.exe"
-
-g++ -std=c++14 -Wall -Wextra -I lib/TwistGuard -o "$env:TEMP\guard.exe" test/test_twist_guard.cpp
-& "$env:TEMP\guard.exe"
-
-g++ -std=c++14 -Wall -Wextra -I lib/Filters -o "$env:TEMP\euro.exe" test/test_one_euro.cpp
-& "$env:TEMP\euro.exe"
-
-g++ -std=c++14 -Wall -Wextra -I lib/ImuReader -I lib/PinchFeatures -o "$env:TEMP\feat.exe" test/test_pinch_features.cpp
-& "$env:TEMP\feat.exe"
-
-g++ -std=c++14 -Wall -Wextra -I lib/SleepPolicy -o "$env:TEMP\sleep.exe" test/test_sleep_policy.cpp
-& "$env:TEMP\sleep.exe"
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" test -e native
 ```
 
-Erwartet fuer alle sieben: `0 Fehler`, Exit 0 — feste Pruefzahlen stehen bewusst nicht mehr
-hier, sie liefen bei jeder Umschreibung der Tests auseinander.
+Erwartet: `10 test cases: 10 succeeded`. Das laeuft in gut zehn Sekunden und ist der
+schnellste Weg, eine Aenderung an einem dieser Module zu pruefen — vor dem Firmware-Build,
+nicht danach.
 
-Das laeuft in Sekunden und ist der schnellste Weg, eine Aenderung an einem dieser Module
-zu pruefen — vor dem Firmware-Build, nicht danach. Es gibt keine `[env:native]`-Sektion,
-ein `pio test` wuerde also aufs Board wollen. Alles andere wird weiterhin ueber
-Kompilieren + Messen am Geraet (Teleplot) verifiziert.
+Einzeln geht es auch ohne PlatformIO (`g++` liegt unter `C:\Strawberry\c\bin`); die
+passende Zeile steht im Kopf jeder Testdatei, z.B.:
 
-Alle sieben Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt:
-`ArmOrientation.h` inkludiert bewusst weder `Arduino.h` noch `config.h`, ebenso
-`TwistToggle.h`, `TwistGuard.h`, `OneEuro.h`, `PinchFeatures.h` und `SleepPolicy.h`.
-Parameter, die sonst aus `cfg::` kaemen, stecken deshalb in eigenen Tuning-Structs
-(`TwistTuning`, `TwistGuardTuning`, `PointerTuning`, `SleepTuning`); das Vorzeichen
-`cfg::ELEV_SIGN` wird erst im Controller angewandt, nicht im `ArmOrientation`-Modul.
+```powershell
+g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine/test_state_machine.cpp
+& "$env:TEMP\fsm.exe"
+```
+
+Erwartet: `0 Fehler`, Exit 0 — feste Pruefzahlen stehen bewusst nicht hier, sie liefen bei
+jeder Umschreibung der Tests auseinander.
+
+Die Tests benutzen **keinen Testrahmen**: jede Datei ist ein eigenstaendiges Programm mit
+eigenem `main()`, das seine Pruefungen zaehlt und ueber den Exit-Code meldet, ob es
+durchgelaufen ist. Genau deshalb funktioniert der g++-Einzeiler. Fuer `pio test` uebersetzt
+`test/test_custom_runner.py` (`test_framework = custom`) die Ausgabe in PlatformIO-
+Testfaelle; das Format `N Pruefungen, M Fehler` und `FEHLER Zeile N: ...` ist damit Teil
+der Schnittstelle und darf nicht beilaeufig geaendert werden.
+
+Alles andere wird weiterhin ueber Kompilieren + Messen am Geraet (Teleplot) verifiziert.
+
+Alle zehn Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt — weder
+`Arduino.h` noch `config.h`: `AirMouseState.h`, `ArmOrientation.h`, `TwistToggle.h`,
+`TwistGuard.h`, `SleepPolicy.h`, `PoseDetector.h`, `PinchDetector.h`, `ScrollJoystick.h`,
+`OneEuro.h`, `PinchFeatures.h`/`ImuSample.h` und `MadgwickAHRS.h`. Die `-I`-Liste in
+`[env:native]` bricht den Build, wenn eines davon abdriftet — das ist Absicht.
+
+Parameter, die sonst aus `cfg::` kaemen, stecken deshalb in eigenen Tuning-Structs:
+`TwistTuning`, `TwistGuardTuning`, `SleepTuning`, `PoseTuning`, `PinchTuning`,
+`ScrollTuning` und `PointerTuning`. **Ein Block von `static_assert`s am Kopf von
+`AirMouseController.h` haelt jedes dieser Felder mit seinem `cfg::`-Gegenstueck zusammen —
+bei jedem neuen Tuning-Feld gehoert er erweitert**, sonst driften zwei Wahrheiten
+lautlos auseinander. In `config.h` sind die betroffenen Gruppen mit `[auch in <X>Tuning]`
+markiert.
+
+Zwei Sonderfaelle: das Vorzeichen `cfg::ELEV_SIGN` wird erst im Controller angewandt, nicht
+im `ArmOrientation`-Modul; und `USE_POSE_MODE` reist als Feld `PoseTuning::classify` in den
+Konstruktor von `PoseDetector` (Compile-Wert, keine Laufzeit-Konfiguration).
 
 Beim Aendern von Schaltern in `config.h` **nie** parallel zu einem laufenden Build: zwei
 gleichzeitige `pio run` auf dasselbe `.pio/build` brechen mit
@@ -85,6 +93,13 @@ Es gibt keine Laufzeit-Konfiguration. Alle Betriebsarten sind `#define`s ganz ob
 Alle Zahlenwerte (Schwellen, Gains, Zeitkonstanten) sind `constexpr` in `namespace cfg`.
 Magic Numbers gehoeren dorthin, nicht in die Module.
 
+`config.h` ist nach Themen gegliedert, in der Reihenfolge, in der ein Messwert sie
+durchlaeuft: Betriebsarten → Debug → Sensor → Takt/Betriebszustaende → Lage → Handhaltung
+→ Zeigen → Klick → Scrollen → Haptik → Akku. **Jede Konstante traegt Einheit und
+Begruendung** — die Datei ist als Spezifikation gedacht, nicht als Werteliste. Neue Werte
+in die passende Gruppe einsortieren und im selben Stil kommentieren; Gruppen, die ein
+Tuning-Struct spiegeln, sind mit `[auch in <X>Tuning]` ueberschrieben.
+
 Filter und Kennlinien nehmen ihre Parameter aber ueber den Konstruktor entgegen
 (`HighPass`, `LowPass`, `MadgwickAHRS`, `OneEuroFilter`, `OrientationPointer` via
 `PointerTuning`), mit `cfg::` nur als Vorgabe. Damit laufen zwei Einstellungen im selben
@@ -104,7 +119,7 @@ Schleifentakt aus, der Controller die IMU-Rate:
 | Zustand | Bedingung | IMU-Rate | Funk | Schleifentakt |
 |---|---|---|---|---|
 | AKTIV | Maus eingeschaltet (`fsm_.on()`) | 208 Hz | an | `cfg::SAMPLE_INTERVAL_US` (209 Hz) |
-| BEREIT | ausgeschaltet, aber innerhalb `SleepTuning::sleepAfter` (60 s) bewegt | 52 Hz | an | `cfg::READY_INTERVAL_US` (52 Hz) |
+| BEREIT | ausgeschaltet, aber innerhalb `SleepTuning::sleepAfterMs` (60 s) bewegt | 52 Hz | an | `cfg::READY_INTERVAL_US` (52 Hz) |
 | SCHLAF | 60 s ohne Bewegung (`gyroSum < SleepTuning::stillDps`) | nur Beschleunigungssensor, Wake-on-Motion auf INT1 | aus | `loop()` suspendiert (`suspendLoop()`), IMU weckt per Interrupt |
 
 Eingeschlafen wird nur aus BEREIT, nie aus AKTIV — sonst verschwaende die Maus mitten im
@@ -124,14 +139,19 @@ ML-Pfad braucht die volle Rate ohnehin nur, solange die Maus eingeschaltet ist, 
 ausschliesslich in AKTIV.
 
 Jedes Modul ist eine header-only Klasse in einem eigenen `lib/<Name>/` (kein `.cpp`),
-per `-I` in `platformio.ini` eingebunden. Neues Modul → Ordner anlegen **und** dort einen
-`-I`-Eintrag ergaenzen.
+per `-I` in `platformio.ini` eingebunden. Neues Modul → Ordner anlegen **und** einen
+`-I`-Eintrag ergaenzen: in `[env:xiaoblesense]` immer, in `[env:native]` zusaetzlich, wenn
+das Modul hardwarefrei ist und einen PC-Test bekommt.
 
 Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `TwistToggle`,
 `TwistGuard`, `PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `SleepPolicy`,
 `Filters/`) kennen weder Hardware noch das EI-SDK. Beides ist auf `ImuReader`, `MouseHID`,
 `Haptic`, `Battery` und `PinchClassifier` beschraenkt. Diese Richtung beim Erweitern
 beibehalten — nichts aus `lib/ei-model` oder `bluefruit` gehoert in ein Policy-Modul.
+
+Streng hardwarefrei (weder `Arduino.h` noch `config.h`) sind davon alle ausser
+`OrientationPointer` und `Filters/LowPass`+`HighPass`; jene beiden enthalten keine
+Entscheidungslogik, sondern rechnen nur.
 
 **`AirMouseState` (`lib/AirMouseState/`) haelt den gesamten Zustand** in zwei Achsen
 (`Power` / `Pose`) und fuehrt selbst nichts aus: jedes Ereignis (`onPower`, `onPose`,
@@ -143,6 +163,12 @@ gehoert hierhin und braucht einen Test, kein zusaetzliches Flag im Controller.
 Waagrecht-Gate, keine Verdrehungs-Bandbreite mehr) → nichts, `Turned` → Rechtsklick bei
 ruhig gehaltener Neigung. Der Pinch selbst ist zustandslos, er veraendert im Automaten
 nichts — auch das ist getestet.
+
+`Idle` ist **keine Zone der Verdrehung**, sondern ausschliesslich das Ergebnis des
+Waagrecht-Gates. Der Scroll-Joystick kommt **nicht** mit der Haltung `Turned`, sondern
+erst ueber `onTwistHeld()` nach einer Sekunde gehaltener Ausdrehung — sonst wuerde jede
+Ein/Aus-Geste nebenbei ein Stueck weit scrollen. Beides stand frueher falsch im
+Klassenkommentar von `PoseDetector` und ist jetzt durch `test_pose_detector` festgenagelt.
 
 **Es gibt bewusst keine `Grab`-Achse und kein Ziehen.** Zwei Anlaeufe dazu sind wieder
 ausgebaut worden: der Doppel-Pinch brauchte ein Wartefenster, das auf *jedem* gewoehnlichen
@@ -205,10 +231,12 @@ Ablauf pro Tick:
 6. `ScrollJoystick` — im Scroll-Modus zaehlt die *gehaltene* Armneigung relativ zum
    Eintrittswinkel (Positionssignal, driftet nicht), nicht die Drehrate.
 7. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
-   `GoToSleep`, bereitet `prepareSleep()` nur Funk und IMU vor (`radioOff()`, IMU auf
-   Sleep-Rate + Wake-on-Motion); das eigentliche Schlafenlegen (`suspendLoop()`) und
-   Aufwecken fuehrt `main.cpp` aus, weil dort der Schleifentakt haengt, der danach neu
-   ausgerichtet werden muss.
+   `GoToSleep`, bereitet das **private** `prepareSleep()` nur Funk und IMU vor
+   (`radioOff()`, IMU auf Sleep-Rate + Wake-on-Motion); das eigentliche Schlafenlegen
+   (`suspendLoop()`) und Aufwecken fuehrt `main.cpp` aus, weil dort der Schleifentakt
+   haengt, der danach neu ausgerichtet werden muss. Von aussen fragt man `wantsSleep()` ab
+   — `prepareSleep()` direkt zu rufen wuerde die Sensorrate vom Zustand des Automaten
+   abkoppeln.
 
 Wichtige Eigenheiten, die man sonst kaputt macht:
 
@@ -256,13 +284,41 @@ Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
 
 ## Konventionen
 
-- Kommentare auf **Deutsch, ASCII ohne Umlaute** (`waehrend`, `Verzoegerung`). Sie
-  begruenden das *Warum* einer Entscheidung, oft mit Literaturverweis
-  (z.B. Casiez et al. 2012 fuer den 1-Euro-Filter) — dieser Stil ist Teil der Arbeit
-  und beim Aendern von Code beizubehalten.
+- Kommentare auf **Deutsch, ASCII ohne Umlaute** (`waehrend`, `Verzoegerung`).
+
+- **Sparsam kommentieren.** Der Code soll sich selbst erklaeren — sprechende Namen,
+  kleine Funktionen mit einer Aufgabe. Ein Kommentar ist die zweitbeste Loesung: laesst
+  sich dieselbe Auskunft durch einen besseren Bezeichner oder eine ausgelagerte Funktion
+  geben, dann so. Richtwert ist die heutige Dichte in `lib/` und `src/` (rund 20 Prozent
+  der Zeilen); wer deutlich darueber landet, hat vermutlich den Code erklaert statt ihn
+  verstaendlich zu schreiben.
+
+  Was bleiben darf: die Kurzbeschreibung am Kopf einer Datei, eine knappe Begruendung
+  fuer etwas, das ohne sie wie ein Fehler aussieht (Reihenfolgen, `#if`-Zweige,
+  Hardware-Eigenheiten wie „aktiv LOW"), Einheiten, und Literaturverweise dort, wo ein
+  Verfahren aus einer Quelle stammt (Casiez et al. 2012, Madgwick 2010).
+
+  Was **nicht** bleibt: was der Code schon sagt, ganze Absaetze Herleitung, und die
+  Geschichte verworfener Ansaetze. Ausfuehrliche Begruendungen gehoeren nach
+  `docs/Programmcode.md`, nicht in den Header.
+
+- **`include/config.h` ist von dieser Regel ausgenommen.** Dort ist der Kommentar der
+  Inhalt: `3.5f` allein sagt nichts, Einheit und Begruendung schon. Siehe unten.
 - Kein `new`/`malloc`, keine `String`, keine dynamischen Container im Hot Path; feste
   Puffer und `float`.
+- Namensgebung, ueber alle Module hinweg einheitlich zu halten:
+  Zeitstempel `t<Ereignis>_` (`tQuiet_`, `tMove_`, `tLastPinch_`), Zaehler `n<Grund>_`
+  (`nDebounce_`, `nMoveFail_`), Winkel mit Suffix `Deg`, Raten mit `Dps` oder `Hz`,
+  Zeitparameter `now_ms` bzw. `now_us`, Tuning-Felder mit Einheit im Namen (`settleMs`,
+  `lowDps`, `sleepAfterMs`), Abfragen nach einem Wunsch des Controllers als
+  `wants...()` (`wantsSleep()`, `wantsActiveRate()`).
+
 - `TODO.md` ist das laufende Arbeitsjournal (offene Messungen, Einstellwerte, Entscheide
   fuer die schriftliche Arbeit). Es ist stellenweise aelter als der Code — z.B. nennt es
   `USE_TWIST_GUARD`, das es in `config.h` nicht mehr gibt. Immer gegen den Code pruefen,
   bevor daraus etwas uebernommen wird.
+
+- `docs/Programmcode.md` ist die ausfuehrliche Beschreibung fuer die schriftliche Arbeit,
+  `docs/Altlasten.md` die Bestandesaufnahme der Aufraeumrunde. `README.md` ist die
+  Einstiegsseite des oeffentlichen Repositoriums und bewusst kurz — Einzelheiten gehoeren
+  nach `docs/`, nicht dorthin.

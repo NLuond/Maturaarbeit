@@ -3,3 +3,7 @@
 .DS_Store
 build/
 .superpowers/
+
+# Der PlatformIO-Testrunner (test/test_custom_runner.py) wird von Python
+# importiert und legt daneben Bytecode ab.
+__pycache__/

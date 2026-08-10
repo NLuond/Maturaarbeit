@@ -6,13 +6,8 @@
 #include "PinchFeatures.h"
 
 // Kapselt das Edge-Impulse-SDK: gleitendes Fenster, Kanal-Packung, Inferenz.
-// Die Entscheidungslogik (Schwelle, Entprellung, Gyro-Guard) liegt bewusst
-// nicht hier, sondern in PinchDetector - das SDK bleibt damit auf diese eine
-// Datei beschraenkt und ein Modellwechsel beruehrt keine Ablauflogik.
-//
-// Die Klasse gibt selbst nichts aus. Wer die Zwischenwerte sehen will, holt
-// sie ueber score()/error() ab; die Ausgabe passiert gebuendelt in
-// AirMouseController::debug().
+// Die Entscheidungslogik liegt in PinchDetector - damit bleibt das SDK auf
+// diese eine Datei beschraenkt und ein Modellwechsel beruehrt keine Ablauflogik.
 
 #if USE_ML_PINCH
 #include "model-parameters/model_metadata.h"
@@ -41,8 +36,7 @@ public:
 
     bool ready() const { return count_ >= FRAME_SIZE; }
 
-    // Fuehrt die Inferenz aus. Kostet Rechenzeit, deshalb nur bei offenem Gate
-    // aufrufen (PinchDetector erledigt das ueber Kurzschlussauswertung).
+    // Kostet Rechenzeit, deshalb nur bei offenem Gate aufrufen.
     bool isPinch() {
         buildOrdered();
 
@@ -51,8 +45,7 @@ public:
 
         ei_impulse_result_t result = { 0 };
         // Selbst gestoppt statt result.timing: dessen Felder sind auf ganze
-        // Millisekunden gerundet, was fuer eine Inferenz in dieser
-        // Groessenordnung zu grob ist, um Optimierungen zu vergleichen.
+        // Millisekunden gerundet und damit hier zu grob.
         const uint32_t t0 = micros();
         err_ = run_classifier(&signal, &result, false);
         lastUs_ = micros() - t0;
@@ -67,10 +60,10 @@ public:
         return score_ > cfg::ML_CONFIDENCE;
     }
 
+    // Fuer die Teleplot-Kanaele p_ml, ei_err und ei_us; ei_us ist der Massstab
+    // dafuer, ob die CMSIS-Beschleunigung im Build tatsaechlich greift.
     float    score()  const { return score_; }
     int      error()  const { return (int)err_; }
-    // Dauer der letzten Inferenz. Der Wert ist der Massstab dafuer, ob die
-    // CMSIS-Beschleunigung im Build tatsaechlich greift.
     uint32_t lastUs() const { return lastUs_; }
 
 private:
@@ -99,8 +92,8 @@ private:
 
 #else
 
-// Ersatz ohne Modell: meldet sich immer bereit und immer positiv, damit in
-// PinchDetector allein das Schwellwert-Gate entscheidet.
+// Ersatz ohne Modell: immer bereit und immer positiv, damit in PinchDetector
+// allein das Schwellwert-Gate entscheidet.
 class PinchClassifier {
 public:
     void     push(const ImuSample&, float) {}

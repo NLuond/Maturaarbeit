@@ -2,6 +2,9 @@
 #include <type_traits>
 #include "config.h"
 
+// Kapselt USB-HID (TinyUSB) und BLE-HID (bluefruit) hinter einer gemeinsamen
+// Schnittstelle, umgeschaltet ueber USE_BLE_HID.
+//
 // move() meldet zurueck, ob das Paket angenommen wurde. Der Aufrufer darf die
 // gesendete Strecke erst dann von seinem Rest abziehen - sonst geht Bewegung
 // verloren, wenn die Warteschlange voll ist.
@@ -20,9 +23,8 @@ public:
         Bluefruit.setTxPower(4);
 
         // Kurzes Verbindungsintervall anfragen (Einheit 1.25 ms, also 7.5-15 ms).
-        // Die Gegenstelle darf ablehnen, aber ohne Anfrage handelt der Stack
-        // teils 30 ms aus - das liegt schon ueber der Schwelle, ab der
-        // Verzoegerung die Zielgenauigkeit messbar verschlechtert.
+        // Ohne Anfrage handelt der Stack teils 30 ms aus - genug, um die
+        // Zielgenauigkeit messbar zu verschlechtern.
         Bluefruit.Periph.setConnInterval(6, 12);
 
         bledis.setManufacturer("Nils");
@@ -41,24 +43,18 @@ public:
     bool move(int8_t dx, int8_t dy) { return blehid.mouseMove(dx, dy); }
 
     // Im Ruhezustand ist der Funk der groesste verbleibende Verbraucher.
-    // Verbindung trennen und Advertising stoppen; beim Aufwachen wird neu
-    // geworben. Die Neuverbindung versteckt sich hinter der Bewegung des
-    // Nutzers: er hebt den Arm, waehrenddessen verbindet sich BLE, und erst
-    // danach kommt die Drehgeste.
     //
-    // Zuerst die Selbstwiederbelebung abschalten: startAdvertising() hat
-    // restartOnDisconnect(true) gesetzt, und die SoftDevice startet das
-    // Advertising sonst im Disconnect-Ereignis sofort wieder - der Funk
-    // waere im Ruhezustand also weiter an, ohne dass man es sieht.
+    // Zuerst die Selbstwiederbelebung abschalten: sonst startet die SoftDevice
+    // das Advertising im Disconnect-Ereignis sofort wieder, und der Funk waere
+    // weiter an, ohne dass man es sieht.
     void radioOff() {
         Bluefruit.Advertising.restartOnDisconnect(false);
         Bluefruit.Advertising.stop();
         if (Bluefruit.connected()) Bluefruit.disconnect(Bluefruit.connHandle());
     }
 
-    // Symmetrisch zurueck: ohne das koennte sich das Geraet nach einem
-    // spaeteren, ungewollten Verbindungsabbruch nicht mehr von selbst
-    // zurueckmelden.
+    // Symmetrisch zurueck, sonst meldet sich das Geraet nach einem spaeteren
+    // Verbindungsabbruch nicht mehr von selbst zurueck.
     void radioOn() {
         Bluefruit.Advertising.restartOnDisconnect(true);
         Bluefruit.Advertising.start(0);
@@ -99,9 +95,9 @@ public:
     void scroll(int8_t ticks)       { hid_.mouseScroll(0, ticks, 0); }
     bool move(int8_t dx, int8_t dy) { return hid_.mouseMove(0, dx, dy); }
 
-    // Ueber USB gibt es keinen Funk und keinen Ruhezustand - das Geraet
-    // haengt an einer Stromquelle, und ein Abschalten wuerde die
-    // Enumeration abwerfen. Leer statt eines #if an der Aufrufstelle.
+    // Ueber USB gibt es keinen Funk: das Geraet haengt an einer Stromquelle,
+    // und ein Abschalten wuerde die Enumeration abwerfen. Leer statt eines #if
+    // an der Aufrufstelle - bei Strommessungen aber beachten.
     void radioOff() {}
     void radioOn()  {}
 
@@ -111,10 +107,7 @@ private:
 #endif
 
 // Es wird immer nur einer der beiden Zweige kompiliert - der andere kann
-// unbemerkt abdriften, bis jemand umschaltet und der Aufrufer nicht mehr passt.
-// Besonders heikel ist der bool-Rueckgabewert von move(): an ihm haengt die
-// Bewegungsakkumulation in AirMouseController. Wuerde er zu void, ginge bei
-// voller Warteschlange still Bewegung verloren.
+// unbemerkt abdriften, bis jemand umschaltet.
 static_assert(std::is_same<decltype(&MouseHID::begin),   void (MouseHID::*)()>::value,
               "MouseHID::begin() hat die falsche Signatur");
 static_assert(std::is_same<decltype(&MouseHID::click),      void (MouseHID::*)()>::value,

@@ -1,7 +1,8 @@
 // Test des Zustandsautomaten. Laeuft auf dem PC, nicht auf dem Chip - der
 // Automat haengt bewusst an keiner Hardware.
 //
-//   g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o build/fsm.exe test/test_state_machine.cpp && ./build/fsm.exe
+//   g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine/test_state_machine.cpp
+//   & "$env:TEMP\fsm.exe"
 //
 #include "AirMouseState.h"
 #include <cstdio>

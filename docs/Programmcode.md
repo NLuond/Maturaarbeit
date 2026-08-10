@@ -1,6 +1,7 @@
 # Der Programmcode der Air Mouse
 
-Beschreibung des Aufbaus und der Funktionsweise der Firmware. Stand: Commit `a3a848c`.
+Beschreibung des Aufbaus und der Funktionsweise der Firmware. Stand: nach der Aufräumrunde
+(Altlastenliste: [Altlasten.md](Altlasten.md)).
 
 Dieses Dokument erklärt, *wie* der Code aufgebaut ist und *warum* er so aufgebaut ist. Die
 Begründungen stehen bewusst dabei — bei mehreren Entscheidungen war die naheliegende
@@ -31,8 +32,8 @@ generierter C++-Code aus Edge Impulse.
 src/main.cpp              Einstiegspunkt: Takt und Betriebsart-Weiche
 include/config.h          Alle Einstellwerte und Compile-Time-Schalter
 lib/<Modulname>/          Je ein Modul, header-only
-test/                     PC-Tests (laufen ohne Hardware)
-docs/                     Diese Datei, Entwurfs- und Planungsdokumente
+test/test_<name>/         Je ein PC-Test (laeuft ohne Hardware)
+docs/                     Diese Datei, Altlastenliste, Entwurfs- und Planungsdokumente
 platformio.ini            Build-Konfiguration und Include-Pfade
 ```
 
@@ -53,25 +54,39 @@ Ein neues Modul braucht deshalb immer zwei Schritte: den Ordner **und** den
 
 ```cpp
 void loop() {
-    const uint32_t now_us = micros();
-    if ((int32_t)(now_us - nextSample_us) < 0) return;   // noch nicht dran
+    // Bis zum naechsten Takt schlafen statt leer durchlaufen (Abschnitt 9.1)
+    while ((int32_t)(nextSample_us - micros()) > 0) delay(1);
 
-    nextSample_us += cfg::SAMPLE_INTERVAL_US;            // naechster Takt
+    const uint32_t now_us = micros();
+
+    // Taktlaenge folgt dem Betriebszustand: AKTIV 209 Hz, BEREIT 52 Hz
+    const bool     active = app.wantsActiveRate();
+    const uint32_t tickUs = active ? cfg::SAMPLE_INTERVAL_US : cfg::READY_INTERVAL_US;
+    const float    tickDt = active ? cfg::DT                 : cfg::READY_DT;
+
+    nextSample_us += tickUs;                             // naechster Takt
     if (Takt verpasst) { neu ausrichten; overruns++; }
 
-    const ImuSample s = imu.read(cfg::DT);
+    const ImuSample s = imu.read(tickDt);
 
-    app.update(s, cfg::DT, now_us);                      // alles Weitere
+    app.update(s, tickDt, now_us);                       // alles Weitere
+
+    if (app.wantsSleep()) { /* Interrupt scharf, suspendLoop(), aufwachen */ }
 }
 ```
 
-Entscheidend ist, dass die Verarbeitung mit einer **festen Schrittweite** `cfg::DT`
-rechnet und nicht mit der tatsächlich verstrichenen Zeit. Alle Filter und das Zeitfenster
-des Klassifikators setzen eine konstante Abtastrate voraus. Nach einer Stockung wird der
-Takt deshalb *neu ausgerichtet*, statt die Rückstände nachzuholen — ein nachgeholter
+Entscheidend ist, dass die Verarbeitung mit einer **festen Schrittweite** rechnet und
+nicht mit der tatsächlich verstrichenen Zeit. Alle Filter und das Zeitfenster des
+Klassifikators setzen eine konstante Abtastrate voraus. Nach einer Stockung wird der Takt
+deshalb *neu ausgerichtet*, statt die Rückstände nachzuholen — ein nachgeholter
 Doppelschritt würde jeden Filter kurzzeitig verfälschen.
 
-Die Schrittweite ist nicht frei wählbar: `cfg::SAMPLE_INTERVAL_US = 4785 µs` entspricht
+„Fest" heisst dabei nicht „eine einzige": es gibt zwei Schrittweiten, `cfg::DT` in AKTIV
+und `cfg::READY_DT` in BEREIT (Abschnitt 9.2). Innerhalb eines Zustands ist die
+Schrittweite konstant, und der ML-Pfad läuft ausschliesslich in AKTIV, wo weiterhin exakt
+`cfg::SAMPLE_INTERVAL_US` gilt.
+
+Die Schrittweite ist dort nicht frei wählbar: `cfg::SAMPLE_INTERVAL_US = 4785 µs` entspricht
 209 Hz und ist die Abtastrate, mit der das Edge-Impulse-Modell trainiert wurde. Ein
 `static_assert` in `PinchClassifier.h` erzwingt beim Kompilieren, dass beide Zahlen
 übereinstimmen. Läuft die Firmware schneller oder langsamer, sieht der Klassifikator ein
@@ -85,9 +100,9 @@ der die Verspätung jedes einzelnen Takts in µs ausgibt — siehe Abschnitt 9.1
 
 ---
 
-## 4. Die vier Schichten
+## 4. Die fünf Rollen
 
-Der Code ist in vier Rollen aufgeteilt, und die Trennung wird strikt eingehalten:
+Der Code ist in fünf Rollen aufgeteilt, und die Trennung wird strikt eingehalten:
 
 | Schicht | Rolle | Module |
 |---|---|---|
@@ -110,9 +125,15 @@ gehalten werden — jede Änderung konnte sie auseinanderlaufen lassen.
 
 Die zweite Regel: **Erkenner und Zustand kennen keine Hardware.** In
 `AirMouseState`, `ArmOrientation`, `TwistToggle`, `TwistGuard`, `PinchDetector`,
-`PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `SleepPolicy` und `Filters/` steht
-kein `#include <Arduino.h>`, kein Bluetooth und nichts aus dem Edge-Impulse-SDK. Genau das
-macht sie auf dem PC testbar.
+`PoseDetector`, `ScrollJoystick`, `SleepPolicy`, `MadgwickAHRS` und `Filters/OneEuro.h`
+steht kein `#include <Arduino.h>`, kein `config.h`, kein Bluetooth und nichts aus dem
+Edge-Impulse-SDK. Genau das macht sie auf dem PC testbar (Abschnitt 10).
+
+Zwei Module halten diese Regel bewusst *nicht* ein und stehen deshalb hier: `Filters/`
+`LowPass`/`HighPass` benutzen die Arduino-Konstante `PI`, und `OrientationPointer` zieht
+`config.h` für die Vorgaben in `PointerTuning`. Beide enthalten keine
+Entscheidungslogik — sie rechnen — und werden über den 1-Euro-Test und über Messungen am
+Gerät abgedeckt.
 
 ---
 
@@ -539,7 +560,7 @@ Haltung als Rechtsklick gilt (Abschnitt 7).
 `MouseHID` kapselt die beiden Übertragungswege hinter einer gemeinsamen Schnittstelle:
 TinyUSB für USB-HID, bluefruit für BLE-HID, umgeschaltet über `USE_BLE_HID`. Es wird immer
 nur einer der beiden Zweige kompiliert — der andere kann unbemerkt abdriften, bis jemand
-umschaltet. Fünf `static_assert`s auf die Methodensignaturen fangen das ab.
+umschaltet. Sieben `static_assert`s auf die Methodensignaturen fangen das ab.
 
 Besonders heikel ist der Rückgabewert von `move()`: er meldet, ob das Paket angenommen
 wurde. Der Aufrufer darf die gesendete Strecke **erst dann** von seinem Rest abziehen,
@@ -549,6 +570,12 @@ sonst geht Bewegung verloren, wenn die Warteschlange voll ist.
 dazwischen. Ein Impuls bedeutet Linksklick, Haltungswechsel oder Ein/Aus; zwei bedeuten
 Rechtsklick. Der Rechtsklick passiert in einer Haltung, in der man den Cursor nicht
 beobachtet — er muss unterscheidbar sein.
+
+Der Motor wird **rein digital** geschaltet (`digitalWrite` HIGH/LOW), nicht per PWM. Er
+kennt also nur an und aus, und es gibt keine Intensitätsstufe: die gesamte Information
+steckt in der *Anzahl* der Impulse und in ihrer Länge. Das ist kein Provisorium — eine
+über PWM abgestufte Stärke ist am Unterarm durch die Kleidung hindurch kaum
+unterscheidbar, ein zweiter Impuls dagegen zuverlässig.
 
 ```
 1 Impuls:   ████                 40 ms
@@ -642,23 +669,45 @@ messen.
 Alle Zahlenwerte sind `constexpr` in `namespace cfg`. Magic Numbers gehören dorthin, nicht
 in die Module.
 
+Die Datei ist nach Themen gegliedert, in der Reihenfolge, in der ein Messwert sie
+durchläuft: Sensor → Takt und Betriebszustände → Lage → Handhaltung → Zeigen → Klick →
+Scrollen → Rückmeldung → Akku. Jeder Wert trägt seine Einheit und seine Begründung; wo
+eine Begründung fehlt, weil der Wert noch nicht am Gerät gemessen ist, steht das
+ausdrücklich dabei.
+
 **Eine bewusste Ausnahme:** Module, die auf dem PC testbar sein müssen, dürfen `config.h`
 nicht einbinden — die Datei zieht `<Arduino.h>` nach. Ihre Werte stehen deshalb in eigenen
-Tuning-Structs: `TwistTuning`, `TwistGuardTuning`, `PointerTuning`, `SleepTuning`. Das
-birgt die Gefahr, dass zwei Orte dieselbe physikalische Grösse beschreiben und
-auseinanderdriften. Für die
-Verdrehungsschwelle, die sowohl `TwistToggle` als auch `PoseDetector` benutzen, fängt ein
-`static_assert` in `AirMouseController.h` das ab:
+Tuning-Structs: `TwistTuning`, `TwistGuardTuning`, `SleepTuning`, `PoseTuning`,
+`PinchTuning`, `ScrollTuning` und `PointerTuning`. Das birgt die Gefahr, dass zwei Orte
+dieselbe physikalische Grösse beschreiben und auseinanderdriften — und ein
+Auseinanderdriften gäbe keinen Compilerfehler, sondern stilles Fehlverhalten: eine Maus,
+die in der abgedrehten Haltung links klickt, ein Gate, das im Untergrund öffnet, ein
+Scroll-Modus, der nicht anspringt.
+
+Ein Block von `static_assert`s in `AirMouseController.h` macht daraus einen
+Übersetzungsfehler:
 
 ```cpp
 constexpr TwistTuning kTwistDefaults{};
+constexpr PoseTuning  kPoseDefaults{};
 static_assert(kTwistDefaults.onDeg == cfg::TURN_ON_DEG, "…dieselbe Schwelle");
 static_assert(kTwistDefaults.backDeg < cfg::TURN_OFF_DEG &&
               cfg::TURN_OFF_DEG < cfg::TURN_ON_DEG,     "…Reihenfolge verletzt");
+static_assert(kPoseDefaults.turnOnDeg    == cfg::TURN_ON_DEG    &&
+              kPoseDefaults.levelMaxDeg  == cfg::LEVEL_MAX_DEG  && /* … */ , "…");
 ```
 
-Ein Auseinanderdriften gäbe sonst keinen Compilerfehler, sondern eine Maus, die in der
-abgedrehten Haltung links klickt.
+Das ist der Preis für die PC-Testbarkeit, und er ist bewusst so bezahlt: die Doppelung ist
+sichtbar, überwacht und in `config.h` an jeder betroffenen Gruppe mit
+`[auch in <X>Tuning]` markiert. Bei jedem neuen Tuning-Feld gehört die Sperre erweitert.
+
+Ein Sonderfall ist `USE_POSE_MODE`. Er ist ein `#define`, `PoseDetector` kennt `config.h`
+aber nicht; der Schalter kommt deshalb als Feld `PoseTuning::classify` in den Konstruktor.
+Das ist trotzdem keine Laufzeit-Konfiguration — der Wert steht beim Übersetzen fest und
+reist nur einen Konstruktor weit. Der Gewinn: „Haltungserkennung aus" ist damit selbst
+prüfbar geworden, und die Prüfung deckt genau die Feinheit ab, die man dabei falsch machen
+kann (die Winkel müssen weiterlaufen, nur die Klassifikation steht still — sonst sähe die
+Ein/Aus-Drehgeste die Drehung nie).
 
 ---
 
@@ -738,7 +787,7 @@ abzuschalten:
 SleepEvent tick(bool mouseOn, float gyroSum, uint32_t now_ms) {
     if (mouseOn || gyroSum >= t_.stillDps) tQuiet_ = now_ms;
     ...
-    if (!wants_ && !settling_ && (now_ms - tQuiet_) >= t_.sleepAfter) { ... }
+    if (!wants_ && !settling_ && (now_ms - tQuiet_) >= t_.sleepAfterMs) { ... }
 }
 ```
 
@@ -874,38 +923,65 @@ Einzelheiten dazu im Messplan in `TODO.md`.
 
 ## 10. Testbarkeit
 
-Sieben Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in Sekunden:
+Zehn Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in gut zehn
+Sekunden:
 
 | Test | prüft | Include-Pfad |
 |---|---|---|
-| `test_state_machine.cpp` | Zustandsautomat | `-I lib/AirMouseState` |
-| `test_arm_orientation.cpp` | Winkelableitung | `-I lib/ArmOrientation` |
-| `test_twist_toggle.cpp` | Ein/Aus-Drehgeste | `-I lib/TwistToggle` |
-| `test_twist_guard.cpp` | Verdrehungsbremse | `-I lib/TwistGuard` |
-| `test_one_euro.cpp` | 1-Euro-Filter | `-I lib/Filters` |
-| `test_pinch_features.cpp` | Kanalbelegung des Modells | `-I lib/ImuReader -I lib/PinchFeatures` |
-| `test_sleep_policy.cpp` | Schlaf-Entscheidung | `-I lib/SleepPolicy` |
+| `test_state_machine` | Zustandsautomat | `-I lib/AirMouseState` |
+| `test_arm_orientation` | Winkelableitung | `-I lib/ArmOrientation` |
+| `test_pose_detector` | Haltungserkennung | `-I lib/PoseDetector -I lib/AirMouseState` |
+| `test_twist_toggle` | Ein/Aus-Drehgeste | `-I lib/TwistToggle` |
+| `test_twist_guard` | Verdrehungsbremse | `-I lib/TwistGuard` |
+| `test_pinch_detector` | Klick-Entscheidung | `-I lib/PinchDetector` |
+| `test_scroll_joystick` | Scroll-Kennlinie | `-I lib/ScrollJoystick` |
+| `test_one_euro` | 1-Euro-Filter | `-I lib/Filters` |
+| `test_pinch_features` | Kanalbelegung des Modells | `-I lib/ImuReader -I lib/PinchFeatures` |
+| `test_sleep_policy` | Schlaf-Entscheidung | `-I lib/SleepPolicy` |
+
+Alle auf einmal:
 
 ```powershell
-g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine.cpp
+pio test -e native        # erwartet: "10 test cases: 10 succeeded"
+```
+
+Einzeln, ohne PlatformIO — die Zeile dafür steht im Kopf jeder Testdatei:
+
+```powershell
+g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/test_state_machine/test_state_machine.cpp
 & "$env:TEMP\fsm.exe"        # erwartet: "… Pruefungen, 0 Fehler", Exit 0
 ```
 
 Das ist der schnellste Weg, eine Änderung zu prüfen — **vor** dem Firmware-Build, nicht
-danach. Der Firmware-Build dauert wegen des Edge-Impulse-SDK mehrere Minuten.
+danach. Der Firmware-Build dauert wegen des Edge-Impulse-SDK rund zwei Minuten.
 
-Alle sieben hängen daran, dass der jeweilige Header **hardwarefrei** bleibt. Das ist keine
+Die Tests benutzen **keinen Testrahmen**. Jede Datei ist ein eigenständiges Programm mit
+eigenem `main()`, das seine Prüfungen zählt und über den Exit-Code meldet, ob es
+durchgelaufen ist. Genau deshalb funktioniert der g++-Einzeiler oben: es gibt keine zweite,
+an PlatformIO gebundene Fassung derselben Prüfungen. Für `pio test` übersetzt ein kleiner
+eigener Runner (`test/test_custom_runner.py`, `test_framework = custom`) die Ausgabe in
+PlatformIO-Testfälle.
+
+Alle zehn hängen daran, dass der jeweilige Header **hardwarefrei** bleibt. Das ist keine
 Nebenbedingung, sondern der Grund für den Zuschnitt der Module. Fällt ein `#include
-<Arduino.h>` hinein, ist der Test weg.
+<Arduino.h>` hinein, ist der Test weg — und die `-I`-Liste in `[env:native]` bricht den
+Build, was genau die Absicht ist.
 
 Die Tests prüfen bewusst *Eigenschaften* statt Implementierungsdetails.
-`test_pinch_features.cpp` etwa stellt dieselbe Bewegung mit zwei um 90° verdrehten
+`test_pinch_features` etwa stellt dieselbe Bewegung mit zwei um 90° verdrehten
 Gravitationslagen nebeneinander und verlangt ein identisches Modellfenster — es testet
 also genau die Eigenschaft, um deretwillen die Kanäle gravitationsfrei sind.
+`test_pinch_detector` zählt mit, wie oft der Klassifikator befragt wurde, und prüft damit
+die Kurzschlussauswertung, die verhindert, dass in jedem Takt eine Inferenz läuft.
 
-Nicht auf dem PC prüfbar sind alle Module, die `<Arduino.h>`, `config.h` oder das
-Edge-Impulse-SDK brauchen: `ImuReader`, `MouseHID`, `Haptic`, `PinchClassifier`, `Battery`,
-`PoseDetector`, `ScrollJoystick`, `PinchDetector` und der Controller selbst. Diese werden
+`PoseDetector`, `PinchDetector` und `ScrollJoystick` sind erst in der Aufräumrunde dazu
+gekommen. Sie zogen vorher `config.h` und damit `<Arduino.h>` herein; ihre Werte stehen
+jetzt in `PoseTuning`/`PinchTuning`/`ScrollTuning` (Abschnitt 8). Damit hat **jedes Modul
+mit Entscheidungslogik einen Test.**
+
+Nicht auf dem PC prüfbar bleiben die Treiber und der Zusammenbau: `ImuReader`, `MouseHID`,
+`Haptic`, `Battery`, `PinchClassifier` (Hardware bzw. Edge-Impulse-SDK) und
+`AirMouseController` selbst, der gerade die Verdrahtung aller anderen ist. Diese werden
 über Kompilieren und Messen am Gerät verifiziert.
 
 ---

@@ -1,7 +1,8 @@
 // Test der Ein/Aus-Drehgeste. Laeuft auf dem PC - TwistToggle haengt bewusst
 // an keiner Hardware und bindet weder Arduino.h noch config.h ein.
 //
-//   g++ -std=c++14 -Wall -Wextra -I lib/TwistToggle -o build/twist.exe test/test_twist_toggle.cpp && ./build/twist.exe
+//   g++ -std=c++14 -Wall -Wextra -I lib/TwistToggle -o "$env:TEMP\twist.exe" test/test_twist_toggle/test_twist_toggle.cpp
+//   & "$env:TEMP\twist.exe"
 //
 #include "TwistToggle.h"
 #include <cstdio>

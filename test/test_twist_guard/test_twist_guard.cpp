@@ -1,7 +1,8 @@
 // Test der Verdrehungs-Bremse. Laeuft auf dem PC - TwistGuard braucht nur
 // <math.h> und <stdint.h>.
 //
-//   g++ -std=c++14 -Wall -Wextra -I lib/TwistGuard -o build/guard.exe test/test_twist_guard.cpp && ./build/guard.exe
+//   g++ -std=c++14 -Wall -Wextra -I lib/TwistGuard -o "$env:TEMP\guard.exe" test/test_twist_guard/test_twist_guard.cpp
+//   & "$env:TEMP\guard.exe"
 //
 #include "TwistGuard.h"
 #include <cstdio>

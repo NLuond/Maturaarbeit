@@ -5,11 +5,14 @@
 #include "OneEuro.h"
 #include "ArmOrientation.h"
 
-// Einstellwerte der Cursor-Kennlinie. Die Vorgaben kommen aus cfg::, lassen
-// sich aber pro Instanz ueberschreiben - damit laufen fuer die Evaluation zwei
-// Kennlinien im selben Programm, statt fuer jede Variante neu zu flashen:
+// Rechnet Drehraten in Pixel um:
+//   gx, gz -> arm::rates() -> Deadzone -> 1-Euro-Filter -> Beschleunigung
+//          -> Ausblendung nach oben -> * SENS * dt
 //
-//   PointerTuning t;  t.accelK = 0.f;   // Vergleich ohne Beschleunigung
+// Die Vorgaben kommen aus cfg::, lassen sich aber pro Instanz ueberschreiben -
+// damit laufen fuer die Evaluation zwei Kennlinien im selben Programm:
+//
+//   PointerTuning t;  t.accelK = 0.f;
 //   OrientationPointer alternativ(t);
 struct PointerTuning {
     float sensX         = cfg::SENS_X;
@@ -32,14 +35,11 @@ public:
           euroX_(t.euroMinCutoff, t.euroBeta, t.euroDCutoff),
           euroY_(t.euroMinCutoff, t.euroBeta, t.euroDCutoff) {}
 
-    // twistDeg ist die geglaettete Verdrehung gegenueber der Zeige-Haltung,
-    // elevDeg die Neigung des Unterarms aus der Waagerechten (beide aus
-    // arm::), nicht irgendein Roll oder Pitch der Platine.
+    // twistDeg: geglaettete Verdrehung gegenueber der Zeige-Haltung,
+    // elevDeg: Armneigung aus der Waagerechten - beide aus arm::.
     void update(float gX, float gZ, float twistDeg, float elevDeg, float dt,
                 float& outX, float& outY) {
     #if USE_ROLL_COMP
-        // Bezogen auf den Raum: eine waagerechte Handbewegung bleibt waagerecht,
-        // auch wenn die Hand dabei verdreht gehalten wird.
         float yaw, nick;
         arm::rates(gX, gZ, twistDeg, yaw, nick);
     #else
@@ -54,8 +54,7 @@ public:
 
     #if USE_ONE_EURO
         // Beide Achsen bekommen dieselbe Grenzfrequenz aus der gemeinsamen
-        // Geschwindigkeit. Getrennte Werte wuerden die Achsen verschieden stark
-        // verzoegern und schraege Striche verbiegen.
+        // Geschwindigkeit; getrennte Werte wuerden schraege Striche verbiegen.
         rateX = euroX_.update(rateX, speed, dt);
         rateY = euroY_.update(rateY, speed, dt);
         speed = sqrtf(rateX*rateX + rateY*rateY);
@@ -74,9 +73,6 @@ public:
         const float stepX = rateX * t_.sensX * accel * dt;
         const float stepY = rateY * t_.sensY * accel * dt;
 
-        // Diagnose: rateX/rateY nach Deadzone und Filter. Gegen die rohen
-        // Kanaele gx/gz gehalten zeigt sich, wie viel Bewegung der 1-Euro-Filter
-        // im Einschwingen wegnimmt - der Verdaechtige bei zu traegem Cursor.
         dbgRateX_ = rateX;  dbgRateY_ = rateY;
         dbgAccel_ = accel;
 
@@ -84,8 +80,7 @@ public:
         outX = stepX;
         outY = stepY;
     #else
-        // Vergleichspfad: eine Zeitkonstante fuer alle Geschwindigkeiten, also
-        // immer derselbe Kompromiss aus Zittern und Verzoegerung.
+        // Vergleichspfad: eine Zeitkonstante fuer alle Geschwindigkeiten.
         const float alpha = 1.f - expf(-dt / t_.smoothTau);
         smX_ += alpha * (stepX - smX_);
         smY_ += alpha * (stepY - smY_);
@@ -102,6 +97,7 @@ public:
         euroY_.reset();
     }
 
+    // Nur fuer die Teleplot-Kanaele rx/ry/pacc.
     float rateX() const { return dbgRateX_; }
     float rateY() const { return dbgRateY_; }
     float accel() const { return dbgAccel_; }
@@ -113,8 +109,7 @@ private:
     float dbgRateX_ = 0.f, dbgRateY_ = 0.f, dbgAccel_ = 1.f;
 
     // Weich statt hart: unterhalb der Schwelle null, darueber wird die Schwelle
-    // abgezogen, damit die Bewegung stetig bei null beginnt. Die Schwelle faengt
-    // nur noch den Rest-Nullpunktfehler ab, den die Bias-Korrektur uebriglaesst.
+    // abgezogen, damit die Bewegung stetig bei null beginnt.
     float deadzone(float v) const {
         if (v >  t_.deadzone) return v - t_.deadzone;
         if (v < -t_.deadzone) return v + t_.deadzone;

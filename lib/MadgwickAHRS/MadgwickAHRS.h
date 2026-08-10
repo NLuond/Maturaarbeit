@@ -1,19 +1,21 @@
 #pragma once
 #include <math.h>
-#include <Arduino.h>
 
+// Lagefilter nach Madgwick (2010): fusioniert Gyroskop und Beschleunigungs-
+// sensor zu einer Schaetzung der raeumlichen Lage. Die Quaternion-Ableitung
+// kommt aus dem Gyroskop und wird mit einem Gradientenschritt in Richtung der
+// gemessenen Schwerkraft korrigiert; beta ist die Schrittweite dieser Korrektur
+// und damit das einzige Gewicht zwischen beiden Quellen.
 class MadgwickAHRS {
 public:
-    float q[4] = {1.f, 0.f, 0.f, 0.f};
-    float beta;
-    explicit MadgwickAHRS(float b = 0.033f) : beta(b) {}
+    explicit MadgwickAHRS(float b = 0.033f) : beta_(b) {}
 
-    void setBeta(float b) { beta = b; }
+    void setBeta(float b) { beta_ = b; }
 
     void update(float Gx, float Gy, float Gz, float Ax, float Ay, float Az, float dt) {
         static const float D2R = 0.017453293f;
         Gx *= D2R; Gy *= D2R; Gz *= D2R;
-        float q0=q[0], q1=q[1], q2=q[2], q3=q[3];
+        float q0=q_[0], q1=q_[1], q2=q_[2], q3=q_[3];
         float qd0 = 0.5f*(-q1*Gx - q2*Gy - q3*Gz);
         float qd1 = 0.5f*( q0*Gx + q2*Gz - q3*Gy);
         float qd2 = 0.5f*( q0*Gy - q1*Gz + q3*Gx);
@@ -32,26 +34,26 @@ public:
             float s3 = 4*q1q1*q3 - _2q1*Ax + 4*q2q2*q3 - _2q2*Ay;
             float sn = s0*s0 + s1*s1 + s2*s2 + s3*s3;
             if (sn > 1e-10f) {
-                float rs = beta / sqrtf(sn);
+                float rs = beta_ / sqrtf(sn);
                 qd0 -= rs*s0; qd1 -= rs*s1; qd2 -= rs*s2; qd3 -= rs*s3;
             }
         }
         q0 += qd0*dt; q1 += qd1*dt; q2 += qd2*dt; q3 += qd3*dt;
         float rn = 1.f / sqrtf(q0*q0+q1*q1+q2*q2+q3*q3);
-        q[0]=q0*rn; q[1]=q1*rn; q[2]=q2*rn; q[3]=q3*rn;
+        q_[0]=q0*rn; q_[1]=q1*rn; q_[2]=q2*rn; q_[3]=q3*rn;
     }
+
     // Richtung von "oben" im Koerperkoordinatensystem: der Einheitsvektor, den
-    // der Beschleunigungsmesser im Ruhezustand messen wuerde. Es ist genau der
-    // Vektor, gegen den die Korrektur oben rechnet (f = up - a), nur eben ohne
-    // die Stoerung durch die Linearbeschleunigung einer schnellen Handbewegung.
+    // der Beschleunigungsmesser im Ruhezustand messen wuerde.
     //
-    // Bewusst kein rollDeg()/pitchDeg() mehr: die Standardformeln benennen die
-    // Drehung um X als "roll" und die um Y als "pitch". Welche Bewegung des Arms
-    // das ist, haengt aber an der Einbaulage - hier war es vertauscht, und der
-    // PoseDetector bekam jahrelang die Armneigung statt der Handverdrehung.
-    // Die Benennung gehoert deshalb dorthin, wo die Einbaulage bekannt ist
-    // (lib/ArmOrientation), nicht in den Filter.
-    float upX() const { return 2.f*(q[1]*q[3] - q[0]*q[2]); }
-    float upY() const { return 2.f*(q[0]*q[1] + q[2]*q[3]); }
-    float upZ() const { return q[0]*q[0] - q[1]*q[1] - q[2]*q[2] + q[3]*q[3]; }
+    // Bewusst kein rollDeg()/pitchDeg(): welche Armbewegung eine Drehung um X
+    // oder Y ist, haengt an der Einbaulage. Benannt wird deshalb dort, wo sie
+    // bekannt ist - in lib/ArmOrientation.
+    float upX() const { return 2.f*(q_[1]*q_[3] - q_[0]*q_[2]); }
+    float upY() const { return 2.f*(q_[0]*q_[1] + q_[2]*q_[3]); }
+    float upZ() const { return q_[0]*q_[0] - q_[1]*q_[1] - q_[2]*q_[2] + q_[3]*q_[3]; }
+
+private:
+    float q_[4] = {1.f, 0.f, 0.f, 0.f};
+    float beta_;
 };

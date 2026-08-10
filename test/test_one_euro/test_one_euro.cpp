@@ -1,6 +1,7 @@
 // Test des 1-Euro-Filters. Laeuft auf dem PC - OneEuro.h braucht nur <math.h>.
 //
-//   g++ -std=c++14 -Wall -Wextra -I lib/Filters -o build/euro.exe test/test_one_euro.cpp && ./build/euro.exe
+//   g++ -std=c++14 -Wall -Wextra -I lib/Filters -o "$env:TEMP\euro.exe" test/test_one_euro/test_one_euro.cpp
+//   & "$env:TEMP\euro.exe"
 //
 // Geprueft wird die Eigenschaft, um die es geht: Handzittern darf die
 // Grenzfrequenz NICHT aufreissen, eine gehaltene Bewegung schon.

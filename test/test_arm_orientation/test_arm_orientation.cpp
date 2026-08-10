@@ -1,7 +1,8 @@
 // Test der Winkel-Ableitung aus der Lage. Laeuft auf dem PC - ArmOrientation.h
 // haengt bewusst weder an Arduino.h noch an config.h.
 //
-//   g++ -std=c++14 -Wall -Wextra -I lib/ArmOrientation -o build/arm.exe test/test_arm_orientation.cpp && ./build/arm.exe
+//   g++ -std=c++14 -Wall -Wextra -I lib/ArmOrientation -o "$env:TEMP\arm.exe" test/test_arm_orientation/test_arm_orientation.cpp
+//   & "$env:TEMP\arm.exe"
 //
 // Geprueft wird gegen die am Geraet abgelesene Einbaulage:
 //   flach auf dem Tisch  -> az = +1, twist = 0, elev = 0

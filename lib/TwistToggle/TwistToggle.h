@@ -2,31 +2,19 @@
 #include <stdint.h>
 #include <math.h>
 
-// Ein/Aus durch eine Drehgeste des Unterarms: gerade halten, um rund 90 Grad
-// abdrehen, innerhalb einer Sekunde wieder zurueck. Ersetzt das fruehere
-// Schuetteln, dessen Schwelle (350 Grad/s) nur knapp ueber den rund 250 Grad/s
-// des normalen Gebrauchs lag.
-//
-// Dieselbe Ausdrehung traegt drei Bedeutungen, unterschieden allein durch das,
-// was danach passiert:
+// Ein/Aus durch eine Drehgeste des Unterarms. Dieselbe Ausdrehung traegt drei
+// Bedeutungen, unterschieden allein durch das, was danach passiert:
 //
 //   raus und binnen maxMs zurueck, nichts dazwischen  -> Toggle (Ein/Aus)
 //   raus, Erschuetterung dazwischen (cancel())        -> nichts, das war ein Pinch
 //   raus und laenger als maxMs gehalten               -> Held (Scroll-Modus)
 //
-// Der Winkel kommt aus der Lageschaetzung (arm::twistDeg ueber Madgwick) und ist
-// damit absolut. Aus der Drehrate integriert wuerde die Referenz wegdriften und
-// die Bedingung "wieder zurueck auf gerade" waere nach einer Minute nicht mehr
-// dieselbe wie am Anfang.
+// Der Winkel kommt aus der Lageschaetzung und ist damit absolut; aus der
+// Drehrate integriert wuerde die Referenz wegdriften. Kehrseite: bei senkrecht
+// gehaltenem Unterarm ist die Verdrehung aus der Schwerkraft nicht beobachtbar,
+// deshalb muss level durchgehend gelten.
 //
-// level muss durchgehend gelten: bei senkrecht gehaltenem Unterarm ist die
-// Verdrehung aus der Schwerkraft nicht beobachtbar, ein haengender Arm wuerde
-// sonst zufaellig schalten.
-//
-// Kein #include "config.h" und kein <Arduino.h>: dieser Header muss sich ohne
-// Toolchain uebersetzen lassen (test/test_twist_toggle.cpp). Die Zahlen stehen
-// deshalb in TwistTuning und nicht in cfg:: - dieselbe bewusste Ausnahme wie
-// bei ArmOrientation.
+// Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft.
 struct TwistTuning {
     float    onDeg     =  70.f;   // ab hier gilt der Arm als abgedreht
     float    backDeg   =  30.f;   // erst hier gilt er wieder als gerade
@@ -46,10 +34,9 @@ public:
 
     // relTwistDeg: geglaettete Verdrehung gegenueber der Zeige-Haltung.
     TwistEvent tick(float relTwistDeg, bool level, uint32_t now_ms) {
-        // Betrag statt Vorzeichen: aus der Zeige-Haltung heraus laesst sich der
-        // Unterarm rund 90 Grad supinieren, aber nur 10 bis 30 Grad pronieren.
-        // onDeg ist damit anatomisch nur in einer Richtung erreichbar, und
-        // welche das ist, muss der Code nicht wissen.
+        // Betrag statt Vorzeichen: onDeg ist anatomisch nur in einer
+        // Drehrichtung erreichbar, und welche das ist, muss der Code nicht
+        // wissen.
         const float tilt = fabsf(relTwistDeg);
 
         if (locked_) {
@@ -58,7 +45,6 @@ public:
         }
 
         if (!level) {
-            // Waagrecht-Gate weg: die laufende Ausdrehung zaehlt nicht mehr.
             out_  = false;
             used_ = true;
             return TwistEvent::None;
@@ -74,7 +60,6 @@ public:
             return TwistEvent::None;
         }
 
-        // ausgedreht
         if (tilt < t_.backDeg) {
             out_ = false;
             const bool quick = (now_ms - tOut_) <= t_.maxMs;
@@ -93,14 +78,11 @@ public:
         return TwistEvent::None;
     }
 
-    // Die laufende Ausdrehung schaltet nicht mehr. Der Aufrufer meldet damit,
-    // dass waehrenddessen eine Erschuetterung ueber der env-Schwelle lag - also
-    // ein Pinch versucht wurde. Absichtlich an der Schwelle und nicht am
-    // erkannten Klick: verpasst der Klassifikator den Pinch, wuerde das
-    // Zurueckdrehen sonst die Maus abschalten statt rechtszuklicken.
+    // Die laufende Ausdrehung schaltet nicht mehr: waehrenddessen lag eine
+    // Erschuetterung ueber der env-Schwelle, es war also ein Pinch.
     void cancel() { used_ = true; }
 
-    // Nur fuer die Teleplot-Ausgabe: 0 = gerade, 1 = ausgedreht,
+    // Fuer den Teleplot-Kanal tw: 0 = gerade, 1 = ausgedreht,
     // 2 = ausgedreht und verbraucht, 3 = Lockout.
     uint8_t state() const {
         if (locked_) return 3;

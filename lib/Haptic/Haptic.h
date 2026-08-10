@@ -2,16 +2,16 @@
 #include <Arduino.h>
 #include "config.h"
 
-// Kleiner Impuls-Sequenzer: n Impulse à HAPTIC_MS mit HAPTIC_GAP_MS dazwischen.
+// Impuls-Sequenzer: n Impulse a HAPTIC_MS mit HAPTIC_GAP_MS dazwischen.
 // Ein Impuls bedeutet Linksklick, Haltungswechsel oder Ein/Aus, zwei bedeuten
 // Rechtsklick.
 //
-// Es gibt bewusst KEINE feste Sperrfrist mehr. Eine solche muesste ueber der
-// Dauer des Zwei-Impuls-Musters liegen (130 ms), cfg::DEBOUNCE_MS steht aber
-// auf 180 ms - ein Doppelklick wuerde damit nur noch einmal brummen. Gesperrt
-// ist stattdessen genau, solange ein Muster laeuft, plus HAPTIC_REST_MS danach.
-// Das erfuellt denselben Zweck: dicht aufeinander folgende Ausloeser
-// verschmelzen nicht zu einem langen Brummen, sondern bleiben abzaehlbar.
+// Der Ausgang wird rein digital geschaltet, nicht per PWM: es gibt keine
+// Intensitaetsstufe, die Information steckt in der Anzahl der Impulse.
+//
+// Gesperrt ist genau, solange ein Muster laeuft, plus HAPTIC_REST_MS danach -
+// eine feste Sperrfrist muesste ueber der Musterdauer liegen und wuerde einen
+// Doppelklick nur noch einmal brummen lassen.
 class Haptic {
 public:
     void begin() {
@@ -21,11 +21,11 @@ public:
 
     void trigger(uint32_t now_ms, uint8_t pulses = 1) {
         if (pulses == 0) return;
-        if (busy_) return;                                         // laufendes Muster nicht stoeren
-        if (used_ && now_ms - tFree_ < cfg::HAPTIC_REST_MS) return; // Ruhe danach
+        if (busy_) return;
+        if (everRun_ && now_ms - tFree_ < cfg::HAPTIC_REST_MS) return;
         left_  = pulses;
         busy_  = true;
-        used_  = true;
+        everRun_ = true;
         on_    = true;
         tStep_ = now_ms;
         digitalWrite(cfg::HAPTIC_PIN, HIGH);
@@ -48,12 +48,10 @@ public:
     }
 
 private:
-    // used_ nur, damit die Ruhezeit nicht schon beim ersten Ausloeser greift:
-    // kurz nach dem Start ist now_ms klein und tFree_ noch null.
-    bool     busy_  = false;
-    bool     on_    = false;
-    bool     used_  = false;
-    uint8_t  left_  = 0;
-    uint32_t tStep_ = 0;
-    uint32_t tFree_ = 0;
+    bool     busy_    = false;
+    bool     on_      = false;
+    bool     everRun_ = false;   // sonst greift die Ruhezeit schon beim ersten Mal
+    uint8_t  left_    = 0;
+    uint32_t tStep_   = 0;
+    uint32_t tFree_   = 0;
 };
