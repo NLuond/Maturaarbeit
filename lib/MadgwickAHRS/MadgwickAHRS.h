@@ -44,11 +44,9 @@ public:
     }
 
     // Richtung von "oben" im Koerperkoordinatensystem: der Einheitsvektor, den
-    // der Beschleunigungsmesser im Ruhezustand messen wuerde.
-    //
-    // Bewusst kein rollDeg()/pitchDeg(): welche Armbewegung eine Drehung um X
-    // oder Y ist, haengt an der Einbaulage. Benannt wird deshalb dort, wo sie
-    // bekannt ist - in lib/ArmOrientation.
+    // der Beschleunigungsmesser im Ruhezustand messen wuerde. Bewusst kein
+    // rollDeg()/pitchDeg() - welche Armbewegung eine Drehung um X oder Y ist,
+    // haengt an der Einbaulage und wird deshalb in lib/ArmOrientation benannt.
     float upX() const { return 2.f*(q_[1]*q_[3] - q_[0]*q_[2]); }
     float upY() const { return 2.f*(q_[0]*q_[1] + q_[2]*q_[3]); }
     float upZ() const { return q_[0]*q_[0] - q_[1]*q_[1] - q_[2]*q_[2] + q_[3]*q_[3]; }

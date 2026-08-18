@@ -8,13 +8,14 @@
 //   Point  - Hand gerade gehalten.
 //   Idle   - Arm zu steil. Ergebnis allein des Neigungs-Gates, keine Zone der
 //            Verdrehung.
-//   Turned - Hand abgedreht. Der Scroll-Joystick kommt nicht mit dieser
-//            Haltung, sondern erst ueber AirMouseState::onTwistHeld().
+//   Turned - Hand abgedreht. Diese Haltung ist der MODUS-WAEHLER: sie
+//            entscheidet, ob ein Pinch links oder rechts meint und ob eine
+//            Bewegung den Cursor bewegt oder scrollt (siehe AirMouseState).
 //
 // Zwei Gates: das enge, symmetrische level() ist Voraussetzung der
 // Ein/Aus-Drehgeste (TwistToggle liest es), das weite und asymmetrische
-// poseUp/poseDown entscheidet ueber Idle. Laeuft der Scroll-Modus (holdTurned),
-// gilt letzteres gar nicht - Scrollen heisst den Arm neigen.
+// poseUp/poseDown entscheidet ueber Idle. Im Scroll-Modus (holdTurned) gilt
+// letzteres nicht - Scrollen heisst gerade, den Arm zu neigen.
 //
 // Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft; die Werte stehen
 // in PoseTuning und sind per static_assert an cfg:: gebunden.
@@ -31,7 +32,7 @@ struct PoseTuning {
     // zur Armachse); asymmetrisch, weil der haengende Arm Ruhezustand ist.
     float    poseUpMaxDeg    = 65.f;   // Grad, Hand oben
     float    poseDownMaxDeg  = 35.f;   // Grad, Hand unten
-    float    poseHoldMaxDeg  = 80.f;   // auch im Scroll-Modus nicht mehr entscheiden
+    float    poseHoldMaxDeg  = 80.f;   // auch mit laufendem Griff nicht mehr entscheiden
 
     float    modeTau         = 0.10f;  // Glaettung fuer Haltung und Geste, s
     float    rollCompTau     = 0.25f;  // langsamere Fassung fuer den Zeiger, s
@@ -57,7 +58,8 @@ public:
     }
 
     // holdTurned: der Scroll-Modus laeuft. Dann entscheidet die Verdrehung
-    // allein, das Neigungs-Gate gilt nicht.
+    // allein - sonst beendete das Neigen des Arms genau den Vorgang, den es
+    // steuert.
     Pose update(float twistDeg, float elevDeg, float gyroSum, float dt, uint32_t now_ms,
                 bool holdTurned = false) {
         smoothAngles(twistDeg, elevDeg, dt);
@@ -72,10 +74,13 @@ public:
         if (now_ms - tMoving_ < t_.calmMs) return freeze(now_ms);
 
         if (holdTurned) {
+            // Nach unten gilt das Gate weiter: ein haengender Arm ist Ruhe,
+            // egal wie die Hand steht. Nach oben nicht - dorthin scrollt man.
+            if (fElev_ < -t_.poseDownMaxDeg) return settle(Pose::Idle, now_ms);
             // So steil steht der Unterarm fast senkrecht und die Verdrehung ist
             // nicht mehr beobachtbar - dort lieber stehen bleiben als auf einem
             // Rauschwert umspringen.
-            if (fabsf(fElev_) > t_.poseHoldMaxDeg) return freeze(now_ms);
+            if (fElev_ > t_.poseHoldMaxDeg) return freeze(now_ms);
             return settle(classify(), now_ms);
         }
 
@@ -102,8 +107,7 @@ private:
     uint32_t tPending_   = 0;
     uint32_t tMoving_    = 0;
 
-    // Beide Winkel schwanken beim normalen Zeigen um mehrere zehn Grad. Die
-    // zweite, langsamere Verdrehung geht in die Drehmatrix des Zeigers, wo
+    // Die zweite, langsamere Verdrehung geht in die Drehmatrix des Zeigers, wo
     // Rauschen unmittelbar als Zittern im Cursor landet.
     void smoothAngles(float twistDeg, float elevDeg, float dt) {
         const float a = 1.f - expf(-dt / t_.modeTau);

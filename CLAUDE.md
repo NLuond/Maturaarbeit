@@ -54,7 +54,7 @@ Alles andere wird weiterhin ueber Kompilieren + Messen am Geraet (Teleplot) veri
 
 Alle zehn Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt — weder
 `Arduino.h` noch `config.h`: `AirMouseState.h`, `ArmOrientation.h`, `TwistToggle.h`,
-`TwistGuard.h`, `SleepPolicy.h`, `PoseDetector.h`, `PinchDetector.h`, `ScrollJoystick.h`,
+`TwistGuard.h`, `SleepPolicy.h`, `PoseDetector.h`, `PinchDetector.h`, `ScrollWheel.h`,
 `OneEuro.h`, `PinchFeatures.h`/`ImuSample.h` und `MadgwickAHRS.h`. Die `-I`-Liste in
 `[env:native]` bricht den Build, wenn eines davon abdriftet — das ist Absicht.
 
@@ -96,9 +96,10 @@ Magic Numbers gehoeren dorthin, nicht in die Module.
 `config.h` ist nach Themen gegliedert, in der Reihenfolge, in der ein Messwert sie
 durchlaeuft: Betriebsarten → Debug → Sensor → Takt/Betriebszustaende → Lage → Handhaltung
 → Zeigen → Klick → Scrollen → Haptik → Akku. **Jede Konstante traegt Einheit und
-Begruendung** — die Datei ist als Spezifikation gedacht, nicht als Werteliste. Neue Werte
-in die passende Gruppe einsortieren und im selben Stil kommentieren; Gruppen, die ein
-Tuning-Struct spiegeln, sind mit `[auch in <X>Tuning]` ueberschrieben.
+Begruendung, aber hoechstens einen Satz** — die Datei ist als Spezifikation gedacht, nicht
+als Werteliste und nicht als Aenderungsprotokoll. Neue Werte in die passende Gruppe
+einsortieren und im selben Stil kommentieren; Gruppen, die ein Tuning-Struct spiegeln,
+sind mit `[auch in <X>Tuning]` ueberschrieben.
 
 Filter und Kennlinien nehmen ihre Parameter aber ueber den Konstruktor entgegen
 (`HighPass`, `LowPass`, `MadgwickAHRS`, `OneEuroFilter`, `OrientationPointer` via
@@ -144,7 +145,7 @@ per `-I` in `platformio.ini` eingebunden. Neues Modul → Ordner anlegen **und**
 das Modul hardwarefrei ist und einen PC-Test bekommt.
 
 Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `TwistToggle`,
-`TwistGuard`, `PoseDetector`, `ScrollJoystick`, `OrientationPointer`, `SleepPolicy`,
+`TwistGuard`, `PoseDetector`, `ScrollWheel`, `OrientationPointer`, `SleepPolicy`,
 `Filters/`) kennen weder Hardware noch das EI-SDK. Beides ist auf `ImuReader`, `MouseHID`,
 `Haptic`, `Battery` und `PinchClassifier` beschraenkt. Diese Richtung beim Erweitern
 beibehalten — nichts aus `lib/ei-model` oder `bluefruit` gehoert in ein Policy-Modul.
@@ -155,85 +156,88 @@ Entscheidungslogik, sondern rechnen nur.
 
 **`AirMouseState` (`lib/AirMouseState/`) haelt den gesamten Zustand** in zwei Achsen
 (`Power` / `Pose`) und fuehrt selbst nichts aus: jedes Ereignis (`onPower`, `onPose`,
-`onTwistHeld`, `onPinch`) liefert ein `Actions`-Struct zurueck, das der Controller in
-`apply()` — der einzigen Stelle mit Seiteneffekten — ausfuehrt. Neue Zustandslogik
-gehoert hierhin und braucht einen Test, kein zusaetzliches Flag im Controller.
+`onPinch`) liefert ein `Actions`-Struct zurueck, das der Controller in `apply()` — der
+einzigen Stelle mit Seiteneffekten — ausfuehrt. Neue Zustandslogik gehoert hierhin und
+braucht einen Test, kein zusaetzliches Flag im Controller.
 
-**Die Haltung waehlt, was ein Pinch bedeutet:** `Point` → linke Taste runter (daraus wird
-Klick oder Ziehen, siehe unten), `Idle` (nur das Waagrecht-Gate, keine Verdrehungs-
-Bandbreite mehr) → nichts, `Turned` → Rechtsklick bei ruhig gehaltener Neigung. Power und
-Pose laesst der Pinch unberuehrt; die einzige Achse, die er bewegt, ist `Grab` — auch das
-ist getestet.
+**Die Haltung bestimmt, wohin die Bewegung geht; der Pinch klickt.**
+
+| | Bewegung | Pinch |
+|---|---|---|
+| **Arm gerade** (`Point`) | Cursor | Linksklick |
+| **Arm gedreht** (`Turned`) | Scrollen | Rechtsklick |
+
+`Idle` (Arm zu steil) bleibt wirkungslos. **Scrollen braucht keinen Griff** — Abdrehen
+genuegt, ohne Haltezeit, ohne Eintrittsgeste. Der Pinch bedeutet in beiden Haltungen
+dasselbe („hier klicken"), nur die Taste wechselt, und **beide loesen sofort aus**. Der
+Pinch ist reine Ausgabe: er veraendert keine Achse.
 
 `Idle` ist **keine Zone der Verdrehung**, sondern ausschliesslich das Ergebnis des
-Neigungs-Gates. Der Scroll-Joystick kommt **nicht** mit der Haltung `Turned`, sondern
-erst ueber `onTwistHeld()` nach einer Sekunde gehaltener Ausdrehung — sonst wuerde jede
-Ein/Aus-Geste nebenbei ein Stueck weit scrollen. Beides stand frueher falsch im
-Klassenkommentar von `PoseDetector` und ist jetzt durch `test_pose_detector` festgenagelt.
+Neigungs-Gates. Das stand frueher falsch im Klassenkommentar von `PoseDetector` und ist
+jetzt durch `test_pose_detector` festgenagelt.
 
-**Die dritte Achse `Grab` (`Off` / `Pending` / `On`) traegt Klick und Ziehen gemeinsam.**
-Es gibt **keinen** `Actions::click` mehr: der Pinch drueckt die Taste sofort
-(`pressLeft`, `Grab::Pending`). Was daraus wird, entscheidet die **Bewegung**:
+Die **gehaltene Ausdrehung** ist der Modus-Waehler und traegt in `TwistToggle` keine
+Bedeutung mehr: sie ist einfach die Haltung `Turned`. Ein `TwistEvent::Held` fuer den
+Scroll-Modus und ein tieferer Scheitelwinkel fuer das Ziehen sind beide erprobt und wieder
+ausgebaut worden — beide lagen auf derselben Achse wie Ein/Aus und machten die Schaltgeste
+unzuverlaessig.
 
-- Cursor bewegt sich ueber `cfg::DRAG_MOVE_PX` → `onDragMove()`, `Grab::On`, Ziehen
-- Cursor bleibt stehen, `cfg::DRAG_WINDOW_MS` laeuft ab → `onClickWindow()`, Taste hoch,
-  das war ein gewoehnlicher Klick
-- Pinch waehrend `Grab::On` → Taste hoch, fallenlassen
+**Es gibt bewusst kein Ziehen, und der Klick ist unteilbar.** Der Automat hat nur zwei
+Achsen (`Power`, `Pose`); `scrolling()` ist reine Ableitung (`on() && pose == Turned`).
 
-Dasselbe Kriterium trennt auf jedem Touchscreen Tippen von Wischen. Der Druck kommt ohne
-jede Verzoegerung; nur das Loslassen wartet.
+Drei Anlaeufe zum Ziehen sind gebaut, am Geraet erprobt und wieder entfernt worden:
 
-**Warum nicht Apples „pinch and move" mit Loslassen als Ende:** ein *gehaltener* Pinch ist
-mit einer IMU grundsaetzlich unsichtbar (Zustand, keine Beschleunigung) — Doublepoint
-verbaut dafuer einen optischen Sensor und liest die Sehnen. Der Loese-*Impuls* waere ein
-Ereignis und damit denkbar; am Geraet gemessen ist er aber nur teilweise vorhanden, bei
-kurzem Pinch gar nicht, und kaum ueber dem Rauschen. Deshalb endet das Ziehen mit einem
-bewussten zweiten Pinch. Ein frueherer Entwurf, der den Doppel-Pinch zum *Starten*
-benutzte, ist daran gescheitert, dass sein Zeitband (200–350 ms) in der Praxis nicht zu
-treffen war.
+- **Loslassen als Ende** (Apples „pinch and move"): ein *gehaltener* Pinch ist mit einer
+  IMU grundsaetzlich unsichtbar (Zustand, keine Beschleunigung) — Doublepoint verbaut
+  dafuer einen optischen Sensor. Der Loese-*Impuls* waere ein Ereignis und damit denkbar;
+  am Geraet gemessen ist er aber nur teilweise vorhanden, bei kurzem Pinch gar nicht, und
+  kaum ueber dem Rauschen.
+- **Doppel-Pinch als Ausloeser**: sein Zeitband (200–350 ms) war in der Praxis nicht zu
+  treffen.
+- **Bewegung als Ausloeser**: dafuer musste die Taste ein Fenster lang unten bleiben, und
+  das verzoegerte **jeden** Klick — ueber BLE, wo ein Bericht je Verbindungsintervall
+  durchgeht, deutlich spuerbar.
 
-**Waehrend des Ziehens wird der Pinch allein an der Huellkurve gemessen**
-(`PinchDetector::tick(..., relaxed)`): der Pinch zum Fallenlassen faellt per Definition in
-eine Armbewegung, und der Gyro-Guard verwuerfe ihn sonst genau dann, wenn er gebraucht
-wird.
+Ebenfalls ausgebaut: ein Ausloeser ueber einen *tieferen* Scheitelwinkel der Ausdrehung.
+Er lag auf derselben Achse wie Ein/Aus, und eine etwas zu weit geratene Schaltgeste wurde
+dadurch stillschweigend zum Ziehen — Ein/Aus verlor messbar an Zuverlaessigkeit. Der
+aeltere Anlauf Pinch-plus-Abdrehen kollidierte mit dem Rechtsklick auf derselben Geste.
 
-**Die Vibration kommt sofort beim Pinch**, nicht erst bei der Entscheidung — ein um das
-ganze Fenster verzoegerter Puls fuehlt sich an, als gaebe es gar keinen. Den zweiten Pinch
-kann er nicht vortaeuschen: er dauert 40 ms, gezaehlt wird erst ab `DEBOUNCE_MS`.
-
-Ein Ausloeser ueber einen *tieferen* Scheitelwinkel der Ausdrehung ist erprobt und wieder
-ausgebaut worden: er lag auf derselben Achse wie Ein/Aus, und eine etwas zu weit geratene
-Schaltgeste wurde dadurch stillschweigend zum Ziehen — Ein/Aus verlor messbar an
-Zuverlaessigkeit. Der aeltere Anlauf Pinch-plus-Abdrehen kollidierte mit dem Rechtsklick
-auf derselben Geste.
-
-Der Preis der Achse ist die Invariante **„nie mit gedrueckter Taste abschalten oder die
-Zeige-Haltung verlassen"** — sie gilt fuer `holding()`, nicht nur `dragging()`: auch das
-unentschiedene `Pending` haelt die Taste koerperlich unten. `onPower()` und `onPose()`
-geben sie von sich aus frei, und `AirMouseState::dropGrab()` ist die einzige Stelle, an
-der das geschieht. Dazu kommen im Controller (`runDrag()`) eine Zwangsfreigabe nach
-`cfg::DRAG_MAX_MS` und ein Erinnerungsimpuls alle `cfg::DRAG_REMIND_MS`, damit ein
-laufendes Ziehen nie stillschweigend aktiv ist. Jede laengere Vibration sperrt
-anschliessend kurz die Klickerkennung (`pinch_.holdOff()`) — sonst laese sie die eigene
-Erschuetterung als Pinch.
+**Die Vibration kommt sofort beim Pinch**, nicht erst bei einer Entscheidung — ein um ein
+Fenster verzoegerter Puls fuehlt sich an, als gaebe es gar keinen. Jede laengere Vibration
+sperrt anschliessend kurz die Klickerkennung (`pinch_.holdOff()`), sonst laese sie die
+eigene Erschuetterung als Pinch.
 
 **Ein/Aus brummt lang** (`Actions::hapticLong`, `cfg::HAPTIC_LONG_MS`), alles andere kurz:
-1 = Klick oder Haltungswechsel, 2 = Rechtsklick, 3 = Ziehen an oder aus. Ein/Aus ist das
-einzige Ereignis, nach dem gar nichts mehr geht, und ein langer Puls hebt sich sauberer ab
-als eine vierte Anzahl kurzer, die ohnehin zu einem Brummen verschmelzen wuerde.
+1 = Klick oder Haltungswechsel, 2 = Rechtsklick. Ein/Aus ist das einzige Ereignis, nach
+dem gar nichts mehr geht, und ein langer Puls hebt sich sauberer ab als eine dritte Anzahl
+kurzer, die ohnehin zu einem Brummen verschmelzen wuerde.
 
 `AirMouseController` verdrahtet nur noch: Ereignisse einsammeln → FSM fragen → `apply()`.
 Ablauf pro Tick:
 
 1. `TwistToggle` — die Ein/Aus-Geste ersetzt das fruehere Schuetteln: Unterarm um rund
-   90 Grad abdrehen und innerhalb einer Sekunde zurueck schaltet ein oder aus
-   (`TwistEvent::Toggle`), laenger gehalten wird daraus der Scroll-Modus
-   (`TwistEvent::Held`). Wie weit ausgedreht wird, spielt darueber hinaus keine Rolle —
-   ein tieferer Scheitelwinkel als zweite Bedeutung ist erprobt und wieder ausgebaut.
+   90 Grad abdrehen und wieder zurueck schaltet ein oder aus (`TwistEvent::Toggle`).
+   `maxMs` (1400 ms) gilt fuer die **ganze Bewegung**, gemessen ab dem Verlassen der
+   Neutralzone (`TWIST_BACK_DEG`) — nicht erst ab dem Ueberschreiten von `onDeg`. Das
+   ist die **einzige** Bedeutung der Geste: wer laenger draussen bleibt, ist einfach in
+   der Haltung `Turned`, und wie weit ausgedreht wird, spielt keine Rolle.
+   Vier Phasen, im Teleplot-Kanal `tw` ablesbar: 0 = Ruhe, 1 = ausgedreht, 2 = auf dem
+   Rueckweg, 3 = Lockout, 4 = durch einen Pinch verbraucht. `Idle -> Out` zuendet nur
+   auf der **Flanke** aus der Neutralzone heraus, sonst begaenne eine abgebrochene Geste
+   im ausgedrehten Stand einfach neu und das Zurueckdrehen schaltete doch.
+   **Die Erschuetterung wird nur gemeldet (`reportShock()`), nicht mehr gewertet.** Ob
+   sie die Ausdrehung verbraucht, entscheidet `TwistToggle` an der Drehrate: nur wenn
+   der Unterarm zuvor `stillMs` (150 ms) lang unter `stillDps` (40 Grad/s) blieb, war
+   sie ein Pinch. Die Drehung erzeugt ihre Erschuetterung am Scheitel naemlich selbst,
+   und weil der Controller nur im **eingeschalteten** Zustand meldet, verwarf genau das
+   frueher das Ausschalten — die Maus ging an, aber nicht wieder aus. Eine Ruhezeit
+   statt eines Momentanvergleichs, weil die Rate am Umkehrpunkt kurz durch null geht,
+   genau dort, wo der Anschlag liegt.
    Drei Bremsen koennen die Geste verwerfen, und alle drei taten das frueher **lautlos**:
    die Abbruchschwelle (`cfg::TWIST_CANCEL_ENV` — eigene, hoehere Schwelle als das
    Klick-Gate, weil die Drehung selbst die Huellkurve ueber `ENV_ON` hebt), das
-   Waagrecht-Gate (`LEVEL_MAX_DEG`) und das Rueckkehrfenster (`maxMs`). Jede zaehlt
+   Waagrecht-Gate (`LEVEL_MAX_DEG`) und das Fenster (`maxMs`). Jede zaehlt
    inzwischen mit (`nTwCan`, `nTwLvl`, `nTwSlow` im Teleplot) — ohne das ist eine
    verschluckte Geste von Unzuverlaessigkeit nicht zu unterscheiden.
    Beim Einschalten setzt `Actions::resetPose` die Haltung auf
@@ -272,17 +276,30 @@ Ablauf pro Tick:
    Gate (`ENV_ON`/`ENV_OFF`) in `PinchDetector` → bei offenem Gate ML-Inferenz in
    `PinchClassifier` → direkt `fsm_.onPinch()`, ohne Zwischenstufe; welche Taste daraus
    wird, entscheidet dort die Haltung. Eine Erschuetterung ueber `ENV_ON` verbraucht
-   dabei auch eine laufende Ausdrehung (`twistToggle_.cancel()`) — sie war ein Pinch und
-   keine Schaltgeste, sonst wuerde ein verpasster Pinch beim Zurueckdrehen die Maus
-   abschalten statt rechtszuklicken.
+   dabei eine laufende Ausdrehung (`twistToggle_.reportShock()`) — sofern der Unterarm
+   dabei ruhte, war sie ein Pinch und keine Schaltgeste, sonst wuerde ein verpasster
+   Pinch beim Zurueckdrehen die Maus abschalten statt rechtszuklicken.
    `PinchDetector::tick()` bekommt den Klassifikator als Callable uebergeben und ruft
    ihn per Kurzschlussauswertung nur bei offenem Gate — deshalb kennt die Policy das
    EI-SDK nicht und die Inferenz laeuft nicht in jedem Takt.
    Nach einem **Rechtsklick** sperrt der Controller zusaetzlich
    (`pinch_.holdOff()`, `RIGHT_CLICK_HOLDOFF_MS`): der Impuls beim Loesen des Pinch
-   schloesse sonst das eben geoeffnete Kontextmenue wieder. Der Rechtsklick bleibt ein
-   ganzer Klick und nimmt am Doppel-Pinch nicht teil.
-5. `OrientationPointer` — `arm::rates()` zerlegt die Drehrate in Gieren und Nicken
+   schloesse sonst das eben geoeffnete Kontextmenue wieder.
+   Im **Scroll-Modus** zaehlt fast allein die Huellkurve (`tick(..., relaxed)`): der
+   Rechtsklick faellt dort per Definition in eine Armbewegung, und der Gyro-Guard
+   verwuerfe ihn genau dann, wenn er gebraucht wird.
+   Der **Dreh-Guard** (`cfg::PINCH_TWIST_GUARD`, 60 Grad/s auf `TwistGuard::rateDps()`)
+   ist der einzige, den `relaxed` nicht aufhebt. Ohne ihn wurde die Ein/Aus-Geste im
+   Scroll-Modus zum ungewollten Rechtsklick. Er kostet nichts, weil gescrollt wird,
+   indem man den Arm neigt und schwenkt, und nicht, indem man ihn verdreht — die
+   beiden Bewegungen liegen auf getrennten Achsen. Zaehler `nTwist`.
+5. `OrientationPointer` und `ScrollWheel` — **eine Quelle, zwei Ziele.** `runMotion()`
+   rechnet die Bewegung genau einmal; sie geht an den Cursor (`Point`) oder ins Rad
+   (`Scroll`, senkrechte Komponente durch `SCROLL_PX_PER_STEP`). Deshalb muss der Nutzer
+   nur eine Bewegungsart lernen. Der Vorgaenger war ein Joystick auf der *gehaltenen*
+   Armneigung mit Eintrittswinkel, Totzone und einer Sekunde Haltezeit — eine zweite
+   Bewegungsart mit eigenem Verhalten.
+   `arm::rates()` zerlegt die Drehrate in Gieren und Nicken
    *bezogen auf den Raum* (Roll-Kompensation, `USE_ROLL_COMP`) → Deadzone → 1-Euro-Filter
    → Beschleunigung → Pixel; im Controller akkumuliert und alle `MOVE_INTERVAL_US` als
    int8 verschickt. Ohne die Kompensation laeuft der Cursor bei verdrehter Hand schraeg;
@@ -293,9 +310,7 @@ Ablauf pro Tick:
    faellt nicht exakt mit einer Platinenachse zusammen, eine Verdrehung leckt deshalb
    auch in `gx` und `gz` und ein einzelner Gyro-Kanal wuerde sie nicht vollstaendig
    erfassen.
-6. `ScrollJoystick` — im Scroll-Modus zaehlt die *gehaltene* Armneigung relativ zum
-   Eintrittswinkel (Positionssignal, driftet nicht), nicht die Drehrate.
-7. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
+6. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
    `GoToSleep`, bereitet das **private** `prepareSleep()` nur Funk und IMU vor
    (`radioOff()`, IMU auf Sleep-Rate + Wake-on-Motion); das eigentliche Schlafenlegen
    (`suspendLoop()`) und Aufwecken fuehrt `main.cpp` aus, weil dort der Schleifentakt
@@ -329,9 +344,24 @@ Wichtige Eigenheiten, die man sonst kaputt macht:
 
 ## Edge-Impulse-Modell (`lib/ei-model/`)
 
-Generierter Code aus Studio-Projekt 1036761 — **nicht von Hand editieren**, beim Update
-den ganzen Ordner ersetzen. Aktuelles Modell: 3 Klassen (`idle`, `negative`, `pinch`),
-Sensor Fusion ueber 5 Kanaele, Fenster 41 Samples @ 209 Hz (~196 ms), int8.
+Generierter Code aus Studio-Projekt **1084395**, Export **v3** — **nicht von Hand
+editieren**, beim Update den ganzen Ordner ersetzen. Aktuelles Modell: **2 Klassen**
+(`non_pinch`, `pinch`), 5 Kanaele, Fenster **40 Samples** @ 209 Hz (~191 ms),
+**Rohsignal + 1D-CNN**, int8.
+
+Struktur und Kopplung sind seit v1 unveraendert (gleiches Projekt, gleiche Fenster- und
+Kanalzahl) — nur die Gewichte kommen aus einem groesseren Datensatz. Ein Wechsel zwischen
+solchen Exporten braucht deshalb **keine** Codeaenderung; die `static_assert`s in
+`PinchClassifier.h` bestaetigen das beim Uebersetzen.
+
+Der Vorgaenger (Projekt 1036761, 3 Klassen, Spectral Analysis + MLP) liegt unter
+`archive/ei-model-1036761/` — dort nur `model-parameters/` und `tflite-model/`, weil das
+SDK bei jedem Export identisch mitkommt und 26 MB gross ist. **Ausserhalb von `lib/`, damit
+PlatformIO es nicht findet.** Der Wechsel hat den Flash-Bedarf von 18.1 auf 14.4 Prozent
+gesenkt: mit den Spektralmerkmalen faellt auch der FFT-Teil des SDK weg.
+
+Die Klassennamen sind Schnittstelle: `PinchClassifier::isPinch()` sucht per `strcmp` die
+Klasse **`pinch`**. Wie die Gegenklasse heisst, ist gleichgueltig — sie wird nie gelesen.
 
 Die Abtastrate ist die kritische Kopplung: `PinchClassifier.h` haelt per `static_assert`
 `cfg::SAMPLE_INTERVAL_US` (4785 µs) mit `EI_CLASSIFIER_INTERVAL_MS` zusammen, ebenso die
@@ -367,8 +397,10 @@ Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
   Geschichte verworfener Ansaetze. Ausfuehrliche Begruendungen gehoeren nach
   `docs/Programmcode.md`, nicht in den Header.
 
-- **`include/config.h` ist von dieser Regel ausgenommen.** Dort ist der Kommentar der
-  Inhalt: `3.5f` allein sagt nichts, Einheit und Begruendung schon. Siehe unten.
+- **`include/config.h` haelt sich an dieselbe Regel, nur mit anderem Zuschnitt**: dort ist
+  der Kommentar der Inhalt (`3.5f` allein sagt nichts), aber je Konstante steht hoechstens
+  ein Satz plus Einheit. Herleitungen und die Geschichte frueherer Werte gehoeren nach
+  `docs/Programmcode.md`.
 - Kein `new`/`malloc`, keine `String`, keine dynamischen Container im Hot Path; feste
   Puffer und `float`.
 - Namensgebung, ueber alle Module hinweg einheitlich zu halten:
@@ -384,6 +416,6 @@ Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
   bevor daraus etwas uebernommen wird.
 
 - `docs/Programmcode.md` ist die ausfuehrliche Beschreibung fuer die schriftliche Arbeit,
-  `docs/Altlasten.md` die Bestandesaufnahme der Aufraeumrunde. `README.md` ist die
+  `docs/EdgeImpulse.md` die Anleitung zum Training des Modells. `README.md` ist die
   Einstiegsseite des oeffentlichen Repositoriums und bewusst kurz — Einzelheiten gehoeren
   nach `docs/`, nicht dorthin.

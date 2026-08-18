@@ -34,8 +34,8 @@ public:
             return gain_;
         }
 
-        // wrapDeg, weil der Winkel bei +-180 Grad umschlaegt - ohne das waere
-        // der Umschlag eine scheinbare Rate von zehntausenden Grad pro Sekunde.
+        // wrapDeg: der Umschlag bei +-180 Grad waere sonst eine scheinbare Rate
+        // von zehntausenden Grad pro Sekunde.
         const float d = wrapDeg(twistDeg - prev_);
         prev_ = twistDeg;
 

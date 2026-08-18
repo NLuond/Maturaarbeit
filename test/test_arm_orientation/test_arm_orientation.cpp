@@ -46,7 +46,44 @@ static void up(float twist, float elev, float& ux, float& uy, float& uz) {
     uz = std::cos(t) * std::cos(e);
 }
 
+// relDeg: Verdrehung gegenueber der Zeige-Haltung, am +-180-Grad-Umschlag
+// richtig gerechnet. Die Ein/Aus-Geste liest diesen Wert roh - ohne das
+// Umschlagen waere eine Drehung dort eine scheinbare Auslenkung von mehreren
+// hundert Grad und die Geste feuerte aus dem Nichts.
+static void check_relDeg() {
+    struct { float twist, neutral, want; const char* msg; } cases[] = {
+        {  90.f,    0.f,   90.f, "einfache Differenz stimmt nicht" },
+        { -90.f,    0.f,  -90.f, "negative Differenz stimmt nicht" },
+        {  10.f,   20.f,  -10.f, "Nullpunkt wird nicht abgezogen" },
+        { -170.f, 170.f,   20.f, "Umschlag nach unten wird nicht gewickelt" },
+        {  170.f,-170.f,  -20.f, "Umschlag nach oben wird nicht gewickelt" },
+        {   0.f,    0.f,    0.f, "Ruhe ergibt nicht null" },
+    };
+    for (auto& c : cases) {
+        checks++;
+        const float got = arm::relDeg(c.twist, c.neutral);
+        if (std::fabs(got - c.want) > 0.01f) {
+            failures++;
+            std::printf("  FEHLER Zeile %d: %s (erwartet %.1f, erhalten %.1f)\n",
+                        __LINE__, c.msg, c.want, got);
+        }
+    }
+    // Das Ergebnis bleibt immer im halben Kreis - sonst waere ein Vergleich
+    // gegen eine Schwelle vom Vorzeichen der Vorgeschichte abhaengig.
+    for (int t = -180; t <= 180; t += 7) {
+        for (int n = -180; n <= 180; n += 13) {
+            checks++;
+            const float d = arm::relDeg((float)t, (float)n);
+            if (d < -180.01f || d > 180.01f) {
+                failures++;
+                std::printf("  FEHLER Zeile %d: relDeg verlaesst -180..180\n", __LINE__);
+            }
+        }
+    }
+}
+
 int main() {
+    check_relDeg();
     float ux, uy, uz;
 
     // --- Die drei am Geraet abgelesenen Bezugslagen --------------------
@@ -74,9 +111,9 @@ int main() {
     }
 
     // --- Beides zugleich -----------------------------------------------
-    // Der eigentliche Zweck der Trennung: der Scroll-Joystick liest die
-    // Armneigung, waehrend die Hand um 90 Grad verdreht gehalten wird. Wuerden
-    // sich die Winkel mischen, waere genau dort die Steuerung unbrauchbar.
+    // Der eigentliche Zweck der Trennung: im Scroll-Modus wird der Arm geneigt,
+    // waehrend die Hand um 90 Grad verdreht gehalten wird. Wuerden sich die
+    // Winkel mischen, waere genau dort die Steuerung unbrauchbar.
     for (int t = -120; t <= 120; t += 30) {
         for (int e = -60; e <= 60; e += 15) {
             up((float)t, (float)e, ux, uy, uz);

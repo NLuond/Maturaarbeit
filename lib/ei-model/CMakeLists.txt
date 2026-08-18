@@ -12,4 +12,3 @@ target_include_directories(app PRIVATE .)
 
 # add all sources to the project
 target_sources(app PRIVATE ${MODEL_SOURCE})
-a

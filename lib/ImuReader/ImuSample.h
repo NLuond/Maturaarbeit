@@ -6,9 +6,9 @@
 struct ImuSample {
     float ax, ay, az;      // roh, mit Erdbeschleunigung -> Madgwick
 
-    // Linear, Erdbeschleunigung abgezogen -> ML-Fenster. Die rohen Achsen
-    // tragen die Handhaltung als Gleichanteil mit sich; ohne ihn ist die
-    // Haltung fuer das Modell unsichtbar und ein Datensatz deckt beide ab.
+    // Linear, Erdbeschleunigung abgezogen -> ML-Fenster. Ohne den Gleichanteil
+    // ist die Handhaltung fuer das Modell unsichtbar, und ein Datensatz deckt
+    // beide Haltungen ab.
     float lax, lay, laz;
 
     float gx, gy, gz;      // Drehraten, Nullpunkt korrigiert

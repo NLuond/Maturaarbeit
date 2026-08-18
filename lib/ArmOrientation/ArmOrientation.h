@@ -10,9 +10,9 @@
 //   +X quer zum Arm (um 90 Grad verdreht ax = +1)
 //   +Y entlang des Unterarms, Achse der Verdrehung
 //
-// MadgwickAHRS bietet bewusst kein rollDeg()/pitchDeg(): ausmultipliziert waere
-// das erste bei dieser Einbaulage die Armneigung und das zweite die
-// Handverdrehung - genau vertauscht gegenueber dem, was die Namen nahelegen.
+// Deshalb gibt es kein rollDeg()/pitchDeg(): bei dieser Einbaulage waere das
+// erste die Armneigung und das zweite die Handverdrehung - genau vertauscht
+// gegenueber dem, was die Namen nahelegen.
 //
 // Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft. cfg::ELEV_SIGN
 // wendet deshalb der Controller an, nicht dieses Modul.
@@ -39,13 +39,19 @@ inline float elevDeg(float ux, float uy, float uz) {
     return asinf(s) * R2D;
 }
 
+// Verdrehung gegenueber der Zeige-Haltung. Ohne das Umschlagen bei +-180 Grad
+// waere die Differenz dort eine scheinbare Auslenkung von hunderten Grad.
+inline float relDeg(float twistDeg, float neutralDeg) {
+    float d = twistDeg - neutralDeg;
+    while (d >  180.f) d -= 360.f;
+    while (d < -180.f) d += 360.f;
+    return d;
+}
+
 // Zerlegt die Drehrate in Gieren und Nicken bezogen auf den Raum statt auf die
 // Platine: bei verdrehter Hand erzeugt eine waagerechte Handbewegung sonst
-// nicht nur gz, sondern auch gx, und der Cursor laeuft schraeg.
-//
-// "Oben" hat in Koerperkoordinaten die Richtung (sin t, 0, cos t), die Querachse
-// steht senkrecht darauf und auf der Unterarmachse: (-cos t, 0, sin t). Bei
-// t = 0 faellt das auf yaw = -gz und nick = gx zurueck.
+// nicht nur gz, sondern auch gx, und der Cursor laeuft schraeg. Bei t = 0
+// faellt das auf yaw = -gz und nick = gx zurueck.
 //
 // gy geht nicht ein: das ist die Drehung um die Unterarmachse selbst, die waehlt
 // die Haltung und soll den Cursor nicht bewegen.

@@ -4,10 +4,9 @@
 // Einzige Stelle, an der die Kanaele des Modells festgelegt sind: sowohl der
 // COLLECT_MODE in main.cpp (Trainingsdaten) als auch das Inferenz-Fenster in
 // PinchClassifier gehen hier durch. Stuende die Reihenfolge an zwei Orten,
-// gaebe eine dort vertauschte Achse weder Compiler- noch Laufzeitfehler - das
-// Modell wuerde nur still schlechter.
-//
-// Aenderungen hier machen jedes bisher trainierte Modell ungueltig.
+// gaebe eine vertauschte Achse weder Compiler- noch Laufzeitfehler - das Modell
+// wuerde nur still schlechter. Aenderungen hier machen jedes bisher trainierte
+// Modell ungueltig.
 namespace feat {
 
     constexpr int CHANNELS = 5;

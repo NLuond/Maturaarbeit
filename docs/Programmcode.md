@@ -1,7 +1,6 @@
 # Der Programmcode der Air Mouse
 
-Beschreibung des Aufbaus und der Funktionsweise der Firmware. Stand: nach der Aufräumrunde
-(Altlastenliste: [Altlasten.md](Altlasten.md)).
+Beschreibung des Aufbaus und der Funktionsweise der Firmware.
 
 Dieses Dokument erklärt, *wie* der Code aufgebaut ist und *warum* er so aufgebaut ist. Die
 Begründungen stehen bewusst dabei — bei mehreren Entscheidungen war die naheliegende
@@ -33,7 +32,7 @@ src/main.cpp              Einstiegspunkt: Takt und Betriebsart-Weiche
 include/config.h          Alle Einstellwerte und Compile-Time-Schalter
 lib/<Modulname>/          Je ein Modul, header-only
 test/test_<name>/         Je ein PC-Test (laeuft ohne Hardware)
-docs/                     Diese Datei, Altlastenliste, Entwurfs- und Planungsdokumente
+docs/                     Diese Datei und die Anleitung zum Modelltraining
 platformio.ini            Build-Konfiguration und Include-Pfade
 ```
 
@@ -110,7 +109,7 @@ Der Code ist in fünf Rollen aufgeteilt, und die Trennung wird strikt eingehalte
 | **Ableitung** | Messwerte in Grössen umrechnen | `MadgwickAHRS`, `ArmOrientation`, `Filters/` |
 | **Erkenner** | aus Grössen Ereignisse machen | `PoseDetector`, `TwistToggle`, `TwistGuard`, `PinchDetector`, `SleepPolicy` |
 | **Zustand** | entscheiden, was ein Ereignis bedeutet | `AirMouseState` |
-| **Ausführung** | Entscheidungen umsetzen | `AirMouseController`, `OrientationPointer`, `ScrollJoystick` |
+| **Ausführung** | Entscheidungen umsetzen | `AirMouseController`, `OrientationPointer`, `ScrollWheel` |
 
 Die wichtigste Regel: **`AirMouseState` hält den gesamten Zustand und führt selbst nichts
 aus.** Jedes Ereignis liefert ein `Actions`-Struct zurück, das beschreibt, *was zu tun
@@ -125,7 +124,7 @@ gehalten werden — jede Änderung konnte sie auseinanderlaufen lassen.
 
 Die zweite Regel: **Erkenner und Zustand kennen keine Hardware.** In
 `AirMouseState`, `ArmOrientation`, `TwistToggle`, `TwistGuard`, `PinchDetector`,
-`PoseDetector`, `ScrollJoystick`, `SleepPolicy`, `MadgwickAHRS` und `Filters/OneEuro.h`
+`PoseDetector`, `ScrollWheel`, `SleepPolicy`, `MadgwickAHRS` und `Filters/OneEuro.h`
 steht kein `#include <Arduino.h>`, kein `config.h`, kein Bluetooth und nichts aus dem
 Edge-Impulse-SDK. Genau das macht sie auf dem PC testbar (Abschnitt 10).
 
@@ -154,19 +153,21 @@ Gerät abgedeckt.
         │
    2. PoseDetector.update(twist_, elev_, gyroSum)  ──► Haltung
         │
-   3. env > ENV_ON  ──► TwistToggle.cancel()       (nur im Ein-Zustand)
+   3. env > TWIST_CANCEL_ENV ──► TwistToggle.reportShock()  (nur im Ein-Zustand)
         │
-   4. TwistToggle.tick(relTwist, level)
-        │      ├── Toggle ──► fsm_.onPower()       ──┐
-        │      └── Held   ──► fsm_.onTwistHeld()   ──┤
+   4. TwistToggle.tick(relTwist, twistRate, level)
+        │      └── Toggle ──► fsm_.onPower()       ──┐
         │                                            │
    5. wenn eingeschaltet:                            ├──► apply()
         │      fsm_.onPose(Haltung)                ──┤     (einzige Stelle
         │      PinchDetector ──► fsm_.onPinch()    ──┘      mit Wirkung)
         │
-   6. laufende Taetigkeit:
-           pointing()  ──► OrientationPointer ──► HID-Bewegung
-           scrolling() ──► ScrollJoystick     ──► HID-Scroll
+   6. runMotion(): EINE Bewegung, zwei Ziele
+        │      OrientationPointer ──► px, py
+        │           ├── scrolling() ──► ScrollWheel ──► HID-Scroll
+        │           └── pointing()  ──► HID-Bewegung
+        │
+   7. SleepPolicy.tick(on, gyroSum) ──► GoToSleep / Settled
 ```
 
 Zwei Details in dieser Reihenfolge sind nicht beliebig:
@@ -393,18 +394,18 @@ solange die Schwerkraft eine Komponente quer zur Unterarmachse hat; deren Betrag
 `sqrt(ux²+uz²) = cos(elev)`. Bei 35° sind das noch 82 % des Signals, erst jenseits von
 rund 70° wird `atan2f(ux, uz)` wirklich schlecht konditioniert.
 
-- **eng und symmetrisch** (`LEVEL_MAX_DEG`, ±35°, `level()`): Voraussetzung der
+- **eng und symmetrisch** (`LEVEL_MAX_DEG`, ±50°, `level()`): Voraussetzung der
   Ein/Aus-Drehgeste. Dort wird geschaltet, und eine Fehlschaltung kostet mehr als eine
   verpasste — also nur bei waagrechtem Arm, wo der Winkel am verlässlichsten ist.
 - **weit und asymmetrisch** (`POSE_UP_MAX_DEG` +65°, `POSE_DOWN_MAX_DEG` −35°,
   `poseGate()`): entscheidet über `Idle`. Die beiden Richtungen bedeuten Verschiedenes —
   nach oben zeigt und scrollt man, nach unten hängt der Arm im Ruhezustand.
 
-Läuft der Scroll-Modus, gilt das weite Gate **gar nicht** (Parameter `holdTurned`, gespeist
-aus `fsm_.scrolling()`). Scrollen heisst den Arm zu neigen; würde das Gate hier greifen,
-beendete das Scrollen sich selbst: `Idle` verlässt `Turned`, und damit löscht die FSM
-`scrollOn_`. Der einzige Weg aus dem Scroll-Modus ist deshalb das Zurückdrehen — und das
-funktioniert auch bei erhobener Hand, ohne den Arm erst senken zu müssen. Nur jenseits von
+Läuft der Scroll-Modus, gilt das weite Gate **gar nicht** (Parameter `holdTurned`).
+Scrollen heisst den Arm zu neigen; würde das Gate hier greifen, beendete das Scrollen sich
+selbst — `Idle` verlässt `Turned`. Der einzige Weg heraus ist deshalb das Zurückdrehen,
+und das funktioniert auch bei erhobener Hand, ohne den Arm erst senken zu müssen. Nur
+jenseits von
 `POSE_HOLD_MAX_DEG` (80°) steht der Unterarm so steil, dass die Verdrehung nicht mehr zu
 sehen ist; dort bleibt die Haltung stehen, statt auf einem Rauschwert umzuspringen.
 
@@ -447,7 +448,7 @@ accMag ──► Hochpass 30 Hz ──► Betrag ──► Tiefpass 15 Hz ──
                         ML-Klassifikator ──► Pinch ja/nein
                                         │
                                         ▼
-                        Entprellung + Gyro-Guard ──► fsm_.onPinch()
+                Entprellung + Gyro-Guard + Dreh-Guard ──► fsm_.onPinch()
 ```
 
 **Die bi-level Schwelle** (öffnet bei `ENV_ON`, schliesst erst unter `ENV_OFF`) verhindert
@@ -465,9 +466,22 @@ Das hat zwei Wirkungen: die Inferenz läuft nicht in jedem Takt, und `PinchDetec
 das Edge-Impulse-SDK nicht — es bleibt damit hardwarefrei.
 
 **Der Gyro-Guard** verwirft Erschütterungen, die während einer heftigen Bewegung
-auftreten. **Die Entprellung** (`DEBOUNCE_MS`) verhindert Mehrfachauslösungen. Beide
-zählen ihre Ablehnungen mit (`nDeb`, `nGyro` im Teleplot) — sonst wäre nicht zu
-unterscheiden, ob eine Flanke gar nicht erkannt oder erkannt und danach verworfen wurde.
+auftreten. **Die Entprellung** (`DEBOUNCE_MS`) verhindert Mehrfachauslösungen. Alle
+Bremsen zählen ihre Ablehnungen mit (`nDeb`, `nGyro`, `nTwist` im Teleplot) — sonst wäre
+nicht zu unterscheiden, ob eine Flanke gar nicht erkannt oder erkannt und danach verworfen
+wurde.
+
+**Der Dreh-Guard** (`PINCH_TWIST_GUARD = 60 °/s`) ist der jüngste der drei und sieht
+allein auf die Verdrehung des Unterarms. Er ist nötig, weil die Ein/Aus-Geste sich genau
+auf dieser Achse abspielt und dabei das Board erschüttert: in der abgedrehten Haltung
+(Scroll-Modus) wurde daraus zuverlässig ein **ungewollter Rechtsklick**, denn dort ist der
+Gyro-Guard bewusst ausgesetzt und die Hüllkurve entscheidet allein.
+
+Er ist deshalb der einzige Guard, den der Scroll-Modus **nicht** aufhebt. Das kostet
+nichts: gescrollt wird durch Neigen und Schwenken des Arms, nicht durch Verdrehen — der
+Rechtsklick im Scroll-Modus fällt also nie in eine Unterarmdrehung, die Schaltgeste
+dagegen immer. Die beiden Bewegungen sind auf getrennten Achsen unterscheidbar, und genau
+das macht den Guard trennscharf statt bloss restriktiv.
 
 **Nach einem Rechtsklick sperrt der Controller zusätzlich** (`holdOff()`,
 `RIGHT_CLICK_HOLDOFF_MS = 700 ms`). Dort lösten bisher fast sicher zwei Klicks aus, und
@@ -485,8 +499,13 @@ es pauschal 120 ms nach *jedem* Klick, was sich als "der Cursor ist kurz tot" an
 
 ### 6.8 Das Modell und seine Kanäle — `PinchFeatures`, `lib/ei-model/`
 
-Das Klassifikationsmodell kommt aus Edge Impulse: 3 Klassen (`idle`, `negative`, `pinch`),
-5 Kanäle, Fenster 41 Werte bei 209 Hz (≈ 196 ms), int8-quantisiert.
+Das Klassifikationsmodell kommt aus Edge Impulse: 2 Klassen (`non_pinch`, `pinch`),
+5 Kanäle, Fenster 40 Werte bei 209 Hz (≈ 191 ms), Rohsignal + 1D-CNN, int8-quantisiert.
+
+Der Vorgänger arbeitete mit drei Klassen und Spectral-Analysis-Merkmalen (FFT) statt dem
+Rohfenster. Der Wechsel senkte den Flash-Bedarf von 18.1 % auf 14.4 %, weil mit den
+Spektralmerkmalen auch der FFT-Teil des SDK entfällt — die Wahl des Verarbeitungsblocks
+kostet also nicht nur Genauigkeit, sondern auch Programmspeicher.
 
 Die Kanalbelegung steht an **genau einer Stelle** im ganzen Projekt:
 
@@ -525,7 +544,9 @@ Modell-Update wird der ganze Ordner ersetzt.
 ### 6.9 Ein/Aus — `TwistToggle`
 
 Ein- und Ausschalten geschieht über eine bewusste Drehung des Unterarms: gerade halten,
-um rund 90° abdrehen, innerhalb einer Sekunde zurück.
+um rund 90° abdrehen und binnen `maxMs` wieder zurück. Das Fenster gilt für die **ganze
+Bewegung**, gemessen ab dem Verlassen der Neutralzone — wer langsam ausdreht, hat für die
+Rückkehr entsprechend weniger Zeit.
 
 Dieselbe Ausdrehung trägt **drei** Bedeutungen, unterschieden allein durch das, was danach
 passiert:
@@ -538,7 +559,7 @@ twist
      │   ╱         ╲          ╱              ╲        ╱                    ╲
  30° ├──╯───────────╰────────╯────────────────╰──────╯──────────────────────╰──
      └──────────────────────────────────────────────────────────────────────────
-        │< 1000 ms >│         │  Pinch dazwischen │    │   > 1000 ms (halten)  │
+        │< 1400 ms >│         │  Pinch dazwischen │    │   > 1400 ms (halten)  │
          EIN / AUS              RECHTSKLICK              SCROLL-MODUS
 ```
 
@@ -546,8 +567,10 @@ twist
 |---|---|---|
 | `onDeg` | 70° | ab hier gilt der Arm als abgedreht |
 | `backDeg` | 30° | erst hier gilt er wieder als gerade |
-| `maxMs` | 1000 ms | länger draussen = keine Schaltgeste mehr |
+| `maxMs` | 1400 ms | Fenster für die ganze Bewegung, ab Verlassen der Neutralzone |
 | `lockoutMs` | 800 ms | Ruhe nach einem Schaltvorgang |
+| `stillDps` | 40 °/s | darunter gilt der Unterarm als ruhend |
+| `stillMs` | 150 ms | so lange Ruhe, bevor eine Erschütterung als Pinch zählt |
 
 Die Rückkehrschwelle (30°) ist strenger als die Haltungs-Hysterese (55°). Sonst würde ein
 halbherziges Zurückwackeln auf 54° die Maus abschalten.
@@ -567,91 +590,82 @@ Bedingung "wieder zurück auf gerade" wäre nach einer Minute nicht mehr dieselb
 Anfang. Die Kehrseite: bei senkrecht gehaltenem Unterarm ist die Verdrehung aus der
 Schwerkraft **nicht beobachtbar**. Das enge Waagrecht-Gate ist deshalb keine
 Bequemlichkeit, sondern eine Voraussetzung der Geste — `TwistToggle` verlangt `level()`
-durchgehend, und zwar die strenge Fassung mit ±35°, nicht das weitere Gate der Haltung.
+durchgehend, und zwar die strenge symmetrische Fassung mit ±50°, nicht das weitere und
+asymmetrische Gate der Haltung.
 
-**Der abgesicherte Fehlermodus.** Verpasst der Klassifikator einen Pinch bei 90°, dreht
-der Nutzer zurück — und die Maus ginge *aus* statt rechtszuklicken. Ein verfehlter Klick
-würde zum Abschalten. Deshalb bricht nicht der *erkannte Klick* die Geste ab, sondern das
-**geöffnete `env`-Gate**: tritt während der Ausdrehung überhaupt eine Erschütterung über
-`ENV_ON` auf, ist die Ausdrehung verbraucht und schaltet nicht mehr. Diese Bedingung ist
-vom Modell unabhängig.
+**Der abgesicherte Fehlermodus — und was er zunächst kaputt machte.** Verpasst der
+Klassifikator einen Pinch bei 90°, dreht der Nutzer zurück — und die Maus ginge *aus*
+statt rechtszuklicken. Ein verfehlter Klick würde zum Abschalten. Deshalb bricht nicht der
+*erkannte Klick* die Geste ab, sondern die Erschütterung selbst: das ist vom Modell
+unabhängig und fängt auch den verpassten Pinch.
+
+Genau diese Absicherung war aber der Grund, warum das **Ausschalten am Gerät nicht
+funktionierte**, während das Einschalten ging. Zwei Asymmetrien wirkten zusammen:
+
+1. Gemeldet wurde nur im **eingeschalteten** Zustand — im Aus-Zustand konnte die
+   Absicherung die Einschaltgeste also gar nicht treffen.
+2. Im Aus-Zustand (BEREIT) läuft die Schleife mit 52 Hz. Der 30-Hz-Hochpass der
+   Hüllkurve liegt dort an der Nyquist-Grenze und liefert praktisch nichts mehr;
+   eingeschaltet, mit 209 Hz, spricht er voll an.
+
+Die Ausdrehung erzeugt ihre Erschütterung nämlich **selbst**: am Scheitel läuft der
+Unterarm gegen seine anatomische Grenze, und dieser Anschlag hebt die Hüllkurve über
+`TWIST_CANCEL_ENV`. Die Geste verwarf sich also im Ausschaltfall regelmässig selbst.
+
+**Die Lösung ist eine zweite Grösse: die Drehrate.** Ein Pinch ist ein Fingerereignis —
+der Unterarm steht dabei still. Der Anschlag einer Drehung dagegen fällt mitten in eine
+Bewegung von mehreren hundert Grad pro Sekunde. `TwistToggle` bekommt die Rate deshalb
+mit herein (dieselbe, die `TwistGuard` aus der Lageschätzung ableitet) und entscheidet
+selbst, was eine gemeldete Erschütterung bedeutet:
+
+> Eine Erschütterung verbraucht die laufende Ausdrehung nur, wenn der Unterarm zuvor
+> `stillMs` lang unter `stillDps` geblieben ist.
+
+Der Controller *meldet* also nur noch (`reportShock()`), er entscheidet nicht mehr. Beide
+gewünschten Eigenschaften bleiben damit erhalten: der Anschlag der eigenen Drehung
+zählt nicht, der bewusste Pinch im ausgedrehten Stand zählt weiterhin.
+
+Die Ruhezeit ist nötig, weil die Rate am Umkehrpunkt der Drehung kurz durch null geht —
+ein reiner Momentanvergleich würde ausgerechnet dort danebengreifen, wo der Anschlag
+liegt. `stillMs` = 150 ms ist länger als dieses Fenster und kürzer als jede Pause, die
+vor einem bewussten Rechtsklick liegt.
+
+**Der Ablauf als Zustandsautomat.** Die Erkennung läuft in vier Phasen, im Teleplot-Kanal
+`tw` direkt ablesbar:
+
+| `tw` | Phase | Bedeutung |
+|---|---|---|
+| 0 | `Idle` | Unterarm in der Neutralzone |
+| 1 | `Out` | ausgedreht, Scheitel wird mitgeschrieben |
+| 2 | `Back` | Scheitel über `onDeg` erreicht, Unterarm kommt zurück |
+| 3 | `Lockout` | eben geschaltet, `lockoutMs` Ruhe |
+| 4 | — | Ausdrehung durch einen Pinch verbraucht |
+
+`Idle → Out` zündet nur auf der **Flanke** aus der Neutralzone heraus. Ohne das heilte
+sich eine abgebrochene Geste selbst: nach einem gerissenen Waagrecht-Gate stünde der Arm
+weiterhin bei 90°, die Ausdrehung begänne im Stand einfach neu, und das Zurückdrehen
+schaltete doch. So muss der Unterarm nach jedem Abbruch erst wieder heim.
 
 Diese Geste ersetzt ein früheres Schütteln, dessen Schwelle (350 °/s) nur knapp über den
 rund 250 °/s des normalen Gebrauchs lag.
 
-### 6.9a Ziehen — die Achse `Grab`
+### 6.10 Scrollen — `ScrollWheel`
 
-Ohne gedrückt gehaltene Taste fehlt einer Maus mehr, als es zunächst scheint: Text
-markieren, ein Fenster verschieben, eine Datei ziehen, einen Schieberegler oder einen
-Scrollbalken-Griff bedienen. HID-seitig ist das kein Problem — `mouseButtonPress()` ohne
-`Release` hält die Taste, und beide Bibliotheken tragen die Tastenmaske in jeden folgenden
-`mouseMove`-Bericht mit. Es fehlte allein die Geste.
+Gescrollt wird mit **derselben Armbewegung wie gezeigt**. `runMotion()` rechnet die
+Bewegung genau einmal; im Scroll-Modus geht ihre senkrechte Komponente ins Rad statt an
+den Cursor, geteilt durch `SCROLL_PX_PER_STEP`. Das Modul selbst ist nur noch ein
+Akkumulator mit Drosselung und Begrenzung — Bruchteile bleiben stehen und laufen auf, so
+dass eine langsame Bewegung dieselbe Gesamtzahl Schritte ergibt wie eine schnelle.
 
-**Warum nicht der naheliegende Weg.** Ein *gehaltener* Pinch ist mit diesem Sensor
-unsichtbar: die Hüllkurve ist ein Hochpass ab 30 Hz und sieht den Kontakt und das Lösen als
-zwei Impulse, aber nichts dazwischen. Naheliegend wäre deshalb „Kontakt = Taste runter,
-Lösen = Taste hoch". Das scheitert an der Zuverlässigkeit des zweiten Impulses — und ein
-verpasstes Lösen hiesse eine klebende Taste, der schlimmste Fehlerfall überhaupt.
+Der Vorgänger war ein Joystick auf der *gehaltenen* Armneigung: er brauchte einen
+Eintrittswinkel, eine Totzone und eine Sekunde Haltezeit, um überhaupt zu starten. Das war
+eine **zweite Bewegungsart** mit eigenem Verhalten, die man zusätzlich lernen musste — und
+sie war der Grund, warum das Neigen des Arms den Scroll-Modus beenden konnte, den es
+steuern sollte. Der Wechsel auf die Zeigerbewegung ist deshalb keine Vereinfachung der
+Implementierung, sondern eine der Bedienung.
 
-**Klick und Ziehen teilen sich einen Pfad.** Es gibt keinen `Actions::click` mehr. Der
-Pinch drückt die Taste **sofort** (`Grab::Pending`), und nur das Loslassen wartet:
-
-```
-Pinch  ──► pressLeft, Grab::Pending
-            │
-            ├── kein zweiter Pinch bis DRAG_WINDOW_MS ──► releaseLeft, 1 Impuls  = Klick
-            └── zweiter Pinch im Fenster ──────────────► Grab::On,   3 Impulse   = Ziehen
-                                                          │
-                                                          └── Pinch ──► releaseLeft = fallenlassen
-```
-
-Genau daran scheiterten alle früheren Doppel-Pinch-Entwürfe: sie warteten, bevor sie
-überhaupt etwas taten, und legten ihre Fensterlänge damit auf *jeden* gewöhnlichen Klick.
-Hier ist der Druck unverzögert; verzögert ist nur das Loslassen, und die Rückmeldung an
-die Hand kommt erst bei der Entscheidung — sonst läge die Vibration mitten im Fenster, in
-dem der zweite Pinch erwartet wird.
-
-**Das Band für den zweiten Pinch** ist `DEBOUNCE_MS` bis `DRAG_WINDOW_MS`, also 200 bis
-350 ms; ein menschlicher Doppeltipp liegt bei 150 bis 300 ms. Die Entprellung ist dabei
-nicht bloss eine untere Grenze, sondern trägt eine Aufgabe: sie sperrt den **Löse-Impuls**
-des ersten Pinch aus, der sonst als zweiter Pinch gälte und auf jedem gewöhnlichen Klick
-ein Ziehen verriegelte. Beide Zahlen gehören deshalb zusammen eingestellt, und ein
-`static_assert` hält das Band mindestens 100 ms breit.
-
-**Der Preis ist eine Invariante:** nie mit gedrückter Taste abschalten oder die
-Zeige-Haltung verlassen. Sie gilt für `holding()` und nicht nur für `dragging()` — auch
-das noch unentschiedene `Pending` hält die Taste körperlich unten. Eingelöst wird sie an
-drei Stellen, alle über die einzige private Methode `dropGrab()`:
-
-| Ereignis | Wirkung bei gedrückter Taste |
-|---|---|
-| `onPower()` | gibt die Taste frei, dann erst aus |
-| `onPose()` beim Verlassen von `Point` | gibt frei — Arm abgelegt oder abgedreht heisst fallenlassen |
-| `onDragRelease()` | bedingungslos, für die Zwangsfreigabe |
-
-Der Zufallslauf in `test_state_machine` prüft über 20 000 Ereignisfolgen unter anderem,
-dass nie zweimal hintereinander gedrückt und nie ins Leere losgelassen wird — sonst liefen
-HID-Zustand und Achse auseinander.
-
-Alles Zeitliche steht im Controller (`runDrag()`), weil der Automat keine Zeit kennt: das
-Fenster selbst, eine **Zwangsfreigabe** nach `DRAG_MAX_MS` (30 s) und ein
-**Erinnerungsimpuls** alle `DRAG_REMIND_MS` (2 s). Der Impuls sperrt anschliessend für
-200 ms die Klickerkennung (`pinch_.holdOff()`) — sonst läse sie die eigene Vibration als
-Pinch und beendete das Ziehen, an das sie gerade erinnert. Dieselbe Sperre schützt den
-langen Ein/Aus-Puls, der mit 200 ms über der Entprellung liegt.
-
-### 6.10 Scrollen — `ScrollJoystick`
-
-Im Scroll-Modus zählt nicht die Drehrate, sondern der **gehaltene Neigungswinkel**
-relativ zum Eintrittswinkel. Weiter geneigt heisst schneller scrollen, zurück in die Mitte
-heisst Stopp. Das ist ein Positions- und kein Ratensignal und driftet deshalb nicht weg.
-
-Eingang ist die Armneigung `elev`, nicht die Handverdrehung — die hat den Modus ja gerade
-ausgewählt und stünde während des Scrollens konstant bei rund 90°.
-
-`inDeadzone()` meldet, ob die Neigung innerhalb der Totzone steht, also gerade nicht
-gescrollt wird. Der Zustandsautomat entscheidet daran, ob ein Pinch in der abgedrehten
-Haltung als Rechtsklick gilt (Abschnitt 7).
+`reset()` verwirft den aufgelaufenen Rest ausserhalb der abgedrehten Haltung: er darf nicht
+in die nächste Scroll-Sitzung überschwappen und dort sofort einen Schritt auslösen.
 
 ### 6.11 Ausgabe — `MouseHID`, `Haptic`
 
@@ -689,41 +703,70 @@ danach.
 
 ## 7. Die Bedienung als Zustandsautomat
 
-`AirMouseState` hält zwei Achsen: `Power` (Off/On) und `Pose` (Point/Idle/Turned), dazu
-ein Flag `scrollOn_`, ob der Scroll-Joystick zugeschaltet ist.
+`AirMouseState` hält zwei Achsen: `Power` (Off/On) und `Pose` (Point/Idle/Turned). Eine
+dritte für einen Griff gibt es bewusst nicht — siehe unten.
+
+**Die Haltung bestimmt, wohin die Bewegung geht; der Pinch klickt.**
+
+| | Bewegung | Pinch |
+|---|---|---|
+| **Arm gerade** (`Point`) | Cursor | Linksklick |
+| **Arm gedreht** (`Turned`) | Scrollen | Rechtsklick |
+
+**Scrollen braucht keinen Griff.** Abdrehen genügt, ohne Haltezeit und ohne Eintrittsgeste;
+`scrolling()` ist reine Ableitung aus der Haltung. Der Pinch bedeutet in beiden Haltungen
+dasselbe — "hier klicken", nur die Taste wechselt — und **beide lösen sofort aus**, ohne
+Fenster.
 
 | Ereignis | `Off` | `On/Point` | `On/Idle` | `On/Turned` |
 |---|---|---|---|---|
 | `onPower()` | → On | → Off | → Off | → Off |
-| `onPose(p)` | ignoriert | Zeiger zurücksetzen | ggf. Wechsel | Joystick aus |
-| `onTwistHeld()` | ignoriert | ignoriert | ignoriert | Joystick an, Neigung nullen |
-| `onPinch(…)` | ignoriert | Linksklick¹ | ignoriert | Rechtsklick² |
+| `onPose(p)` | ignoriert | Zeiger zurücksetzen | ggf. Wechsel | ggf. Wechsel |
+| `onPinch(armOut)` | ignoriert | Linksklick¹ | ignoriert | Rechtsklick |
 
 ¹ nur wenn der Arm **nicht** physisch abgedreht ist — siehe unten.
-² nur wenn nicht gerade gescrollt wird — siehe unten.
 
 Die Rückgabe ist immer ein `Actions`-Struct:
 
 ```cpp
 struct Actions {
-    bool click, rightClick;      // Maustasten
-    bool resetPointer;           // aufgelaufene Bewegung verwerfen
-    bool enterScroll;            // Joystick auf aktuelle Neigung nullen
-    bool resetPose;              // Haltungserkennung zuruecksetzen
-    uint8_t hapticPulses;        // 0 = still, 1 = normal, 2 = Rechtsklick
+    bool click, rightClick;   // beide als ganzer, unteilbarer Klick
+    bool resetPointer;        // aufgelaufene Bewegung verwerfen
+    bool resetPose;           // Haltungserkennung zuruecksetzen
+    uint8_t hapticPulses;     // 0 still, 1 Klick/Haltungswechsel, 2 Rechtsklick
+    bool hapticLong;          // Ein/Aus
 };
 ```
 
-Zwei Bedingungen in `onPinch(bool scrollIdle, bool armOut)` verdienen eine Erklärung, weil
-beide aus Fehlern entstanden sind:
+**Warum keine Taste einen Zustand braucht.** Beide Klicks sind ganze Klicks: Druck und
+Freigabe im selben Aufruf. Damit gibt es keine Tastenmaske, die zwischen zwei Takten
+auseinanderlaufen könnte, und keinen Fehlerfall "klebende Taste" — der einzige, der einen
+Rechner wirklich unbenutzbar macht.
 
-**`scrollIdle` — kein Klick mitten im Scrollen.** Wer scrollt, kippt den Arm; ein Klick im
-Lauf wäre nicht vorhersehbar. Die Bedingung lautet aber `!scrollOn_ || scrollIdle`, nicht
-einfach `scrollIdle`. Der Grund: `ScrollJoystick::dead_` wird nur berechnet, solange
-gescrollt wird. Nach dem Zurückdrehen friert der Wert ein — ein veraltetes `false` hätte
-den schnellen Rechtsklick nach *jeder* Scroll-Sitzung stillschweigend getötet, bis man die
-Haltung eine volle Sekunde hält. Läuft der Joystick nicht, gibt es nichts, womit ein Klick
-kollidieren könnte.
+**Warum es kein Ziehen gibt.** Ohne gedrückt gehaltene Taste fehlt einer Maus mehr, als es
+zunächst scheint: Text markieren, ein Fenster verschieben, einen Schieberegler bedienen.
+Drei Anläufe sind trotzdem gebaut, am Gerät erprobt und wieder entfernt worden.
+
+Der naheliegende Weg — Kontakt = Taste runter, Lösen = Taste hoch — scheitert am Sensor.
+Ein *gehaltener* Pinch ist mit einer IMU grundsätzlich unsichtbar: ein Zustand erzeugt
+keine Beschleunigung, und die Hüllkurve ist ein Hochpass ab 30 Hz, der Kontakt und Lösen
+als zwei Impulse sieht, aber nichts dazwischen. Der Löse-*Impuls* wäre ein Ereignis und
+damit denkbar; am Gerät gemessen ist er aber nur teilweise vorhanden, bei kurzem Pinch gar
+nicht, und kaum über dem Rauschen. Ein Tastenzustand, dessen Ende in der Hälfte der Fälle
+ausbleibt, ergibt genau die klebende Taste. (Doublepoint verbaut für dieselbe Funktion
+einen optischen Sensor und liest damit die Sehnen.)
+
+Der zweite Anlauf, ein **Doppel-Pinch** als Auslöser, brauchte ein Zeitband von 200–350 ms,
+das in der Praxis nicht zu treffen war. Der dritte, **Bewegung** als Auslöser, war der
+lehrreichste: er funktionierte, verlangte aber, dass die Taste ein Fenster lang unten
+bleibt, bevor entschieden wird — und legte damit die Fensterlänge als Verzögerung auf
+*jeden* gewöhnlichen Klick. Über BLE, wo ein Bericht je Verbindungsintervall durchgeht,
+war das deutlich spürbar. Ein viertes Mal wurde ein tieferer Scheitelwinkel der Ausdrehung
+probiert; er lag auf derselben Achse wie Ein/Aus und machte die Schaltgeste unzuverlässig.
+
+Der Klick ist deshalb wieder unteilbar und sofort. Das ist ein brauchbares Beispiel für
+die Arbeit: eine Geste kann korrekt implementiert sein und trotzdem der falsche Entwurf,
+weil ihr Preis auf einer Funktion liegt, die tausendmal häufiger gebraucht wird.
 
 **`armOut` — kein Linksklick bei abgedrehtem Arm.** `TwistToggle` reagiert sofort auf den
 Winkel; die Haltung im Automaten kommt erst durch Glättung, Haltezeit und Bewegungssperre
@@ -734,13 +777,11 @@ solange der Arm draussen ist. Bewusst unterdrücken und nicht auf Rechtsklick um
 nichts zu tun ist wiederherstellbar — man pinscht eine halbe Sekunde später nochmal —, ein
 Klick auf der falschen Taste an unsichtbarer Position nicht.
 
-**Der Scroll-Joystick kommt nicht mit der Haltung**, sondern erst über `onTwistHeld()`
-nach einer Sekunde. Sonst würde jede Ein/Aus-Geste nebenbei ein Stück weit scrollen.
-
-**Es gibt bewusst keine Grab-Achse und kein Ziehen.** Zwei Anläufe dazu wurden wieder
-ausgebaut: der Doppel-Pinch brauchte ein Wartefenster, das als Verzögerung auf *jedem*
-gewöhnlichen Klick lag; Pinch-plus-Abdrehen kollidierte mit dem Rechtsklick auf derselben
-Geste. Solange nichts eine Taste gedrückt hält, wäre ein Zustand dafür nur Ballast.
+**Zwei Sperren nach einem Klick.** Nach einem Rechtsklick sperrt der Controller die
+Klickerkennung für `RIGHT_CLICK_HOLDOFF_MS` — der Impuls beim Lösen der Finger schlösse
+sonst das eben geöffnete Kontextmenü wieder. Nach dem langen Ein/Aus-Puls gilt dasselbe:
+er dauert mit 200 ms länger als die Entprellung, und ohne die Sperre läse die
+Klickerkennung die eigene Vibration als Pinch.
 
 ---
 
@@ -753,9 +794,10 @@ Es gibt **keine Laufzeit-Konfiguration**. Alle Betriebsarten sind `#define`s am 
 |---|---|
 | `COLLECT_MODE` | statt HID nur CSV ausgeben, für die Datenaufnahme |
 | `DEBUG_TELEPLOT` | Teleplot-Kanäle senden; kostet Serial-Bandbreite und bremst die Schleife |
-| `DEBUG_SET` | welche Kanalgruppe (`DEBUG_PINCH`, `DEBUG_POINT`, `DEBUG_ORIENT`, `DEBUG_ALL`) |
+| `DEBUG_SET` | welche Kanalgruppe (`DEBUG_ALL`, `DEBUG_PINCH`, `DEBUG_POINT`, `DEBUG_ORIENT`, `DEBUG_ENV`) |
 | `USE_ML_PINCH` | ML-Klassifikator gegen reine Schwellwerterkennung |
 | `USE_BLE_HID` | BLE gegen USB |
+| `BLE_ALWAYS_ON` | Funk auch im Schlaf erreichbar; kostet Ruhestrom, macht aber jederzeit koppelbar |
 | `USE_POSE_MODE` | Haltungserkennung aus → dauerhaft `Point` |
 | `USE_ONE_EURO` | 1-Euro-Filter gegen festen Tiefpass |
 | `USE_ROLL_COMP` | Roll-Kompensation ein/aus |
@@ -1032,7 +1074,7 @@ Sekunden:
 | `test_twist_toggle` | Ein/Aus-Drehgeste | `-I lib/TwistToggle` |
 | `test_twist_guard` | Verdrehungsbremse | `-I lib/TwistGuard` |
 | `test_pinch_detector` | Klick-Entscheidung | `-I lib/PinchDetector` |
-| `test_scroll_joystick` | Scroll-Kennlinie | `-I lib/ScrollJoystick` |
+| `test_scroll_wheel` | Rad-Ausgabe | `-I lib/ScrollWheel` |
 | `test_one_euro` | 1-Euro-Filter | `-I lib/Filters` |
 | `test_pinch_features` | Kanalbelegung des Modells | `-I lib/ImuReader -I lib/PinchFeatures` |
 | `test_sleep_policy` | Schlaf-Entscheidung | `-I lib/SleepPolicy` |
@@ -1051,7 +1093,7 @@ g++ -std=c++14 -Wall -Wextra -I lib/AirMouseState -o "$env:TEMP\fsm.exe" test/te
 ```
 
 Das ist der schnellste Weg, eine Änderung zu prüfen — **vor** dem Firmware-Build, nicht
-danach. Der Firmware-Build dauert wegen des Edge-Impulse-SDK rund zwei Minuten.
+danach. Der Firmware-Build dauert wegen des Edge-Impulse-SDK ein bis zwei Minuten.
 
 Die Tests benutzen **keinen Testrahmen**. Jede Datei ist ein eigenständiges Programm mit
 eigenem `main()`, das seine Prüfungen zählt und über den Exit-Code meldet, ob es
@@ -1072,7 +1114,7 @@ also genau die Eigenschaft, um deretwillen die Kanäle gravitationsfrei sind.
 `test_pinch_detector` zählt mit, wie oft der Klassifikator befragt wurde, und prüft damit
 die Kurzschlussauswertung, die verhindert, dass in jedem Takt eine Inferenz läuft.
 
-`PoseDetector`, `PinchDetector` und `ScrollJoystick` sind erst in der Aufräumrunde dazu
+`PoseDetector`, `PinchDetector` und `ScrollWheel` sind erst in der Aufräumrunde dazu
 gekommen. Sie zogen vorher `config.h` und damit `<Arduino.h>` herein; ihre Werte stehen
 jetzt in `PoseTuning`/`PinchTuning`/`ScrollTuning` (Abschnitt 8). Damit hat **jedes Modul
 mit Entscheidungslogik einen Test.**
@@ -1136,9 +1178,11 @@ alle aufgezeichneten Werte waren untereinander unvergleichbar. Er ist jetzt fest
 (`TWIST_NEUTRAL_DEG`): das Board sitzt immer gleich am Arm, der Nullpunkt ist eine
 Eigenschaft der Bauform und keine der einzelnen Sitzung.
 
-**Verworfenes bleibt begründet stehen.** Ausgebaute Ansätze — das Ziehen, das Schütteln,
-die Einschalt-Kalibrierung — sind im Code und in den Dokumenten mit ihrer Begründung
-vermerkt. Ohne diese Notiz baut man sie beim nächsten Mal wieder ein.
+**Verworfenes bleibt begründet stehen — aber nicht im Code.** Ausgebaute Ansätze (das
+Ziehen, das Schütteln, der Scroll-Joystick, die Einschalt-Kalibrierung) sind in diesem
+Dokument mit ihrer Begründung vermerkt; ohne diese Notiz baut man sie beim nächsten Mal
+wieder ein. Im Code selbst stehen sie nicht: dort erklärt ein Kommentar den heutigen
+Stand, nicht den Weg dorthin.
 
 ---
 

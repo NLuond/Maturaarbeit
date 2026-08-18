@@ -12,10 +12,8 @@ struct SleepTuning {
     float    stillDps     = 20.f;    // Grad/s
     uint32_t sleepAfterMs = 60000;   // ms Ruhe bis zum Schlaf
 
-    // Sperre nach dem Aufwachen, waehrend der Madgwick mit erhoehtem Beta
-    // laeuft. Die beiden Zahlen gehoeren miteinander gerechnet: cfg::
-    // MADGWICK_BETA_FAST entspricht rund 28.6 Grad/s, 1500 ms erlauben also
-    // rund 43 Grad Nachfuehrung.
+    // Einschwingfenster nach dem Aufwachen, in dem Madgwick mit erhoehtem Beta
+    // laeuft: 28.6 Grad/s mal 1500 ms sind rund 43 Grad Nachfuehrung.
     uint32_t settleMs     = 1500;
 };
 

@@ -10,10 +10,8 @@
 //          -> Ausblendung nach oben -> * SENS * dt
 //
 // Die Vorgaben kommen aus cfg::, lassen sich aber pro Instanz ueberschreiben -
-// damit laufen fuer die Evaluation zwei Kennlinien im selben Programm:
-//
-//   PointerTuning t;  t.accelK = 0.f;
-//   OrientationPointer alternativ(t);
+// damit laufen fuer die Evaluation zwei Kennlinien im selben Programm
+// (PointerTuning t; t.accelK = 0.f;).
 struct PointerTuning {
     float sensX         = cfg::SENS_X;
     float sensY         = cfg::SENS_Y;

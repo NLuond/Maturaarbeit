@@ -102,7 +102,7 @@ $pio = "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe"
 & $pio device monitor -b 115200     # serielle Ausgabe ansehen
 ```
 
-Der Build dauert wegen des Edge-Impulse-SDK rund zwei Minuten und ist sehr gesprächig;
+Der Build dauert wegen des Edge-Impulse-SDK ein bis zwei Minuten und ist sehr gesprächig;
 interessant sind nur die RAM/Flash-Zeile und `SUCCESS`.
 
 Flashen über den seriellen Bootloader: die RESET-Taste der Platine zweimal kurz drücken,
@@ -155,14 +155,14 @@ und damit auf dem PC testbar.
 | `ArmOrientation` | daraus die benannten Winkel `twist` und `elev` | ✓ | ✓ |
 | `Filters/` | Tief-, Hochpass, Hüllkurve, 1-Euro-Filter | teilweise | ✓ |
 | `PoseDetector` | Winkel → Haltung (Zeigen / Idle / Abgedreht) | ✓ | ✓ |
-| `TwistToggle` | Ein/Aus- und Scroll-Geste aus der Unterarmdrehung | ✓ | ✓ |
+| `TwistToggle` | Ein/Aus-Geste aus der Unterarmdrehung | ✓ | ✓ |
 | `TwistGuard` | bremst den Cursor während einer Unterarmdrehung | ✓ | ✓ |
 | `PinchDetector` | Schwelle, Entprellung, Gyro-Guard → Klick ja/nein | ✓ | ✓ |
 | `PinchClassifier` | kapselt das Edge-Impulse-Modell | – | – |
 | `PinchFeatures` | einzige Stelle, an der die Modellkanäle festliegen | ✓ | ✓ |
 | `AirMouseState` | Zustandsautomat; entscheidet, was ein Ereignis bedeutet | ✓ | ✓ |
 | `OrientationPointer` | Drehraten → Pixel (Deadzone, Filter, Kennlinie) | – | – |
-| `ScrollJoystick` | gehaltene Armneigung → Scroll-Schritte | ✓ | ✓ |
+| `ScrollWheel` | Zeigerbewegung → Scroll-Schritte | ✓ | ✓ |
 | `SleepPolicy` | entscheidet, wann das Gerät schlafen geht | ✓ | ✓ |
 | `MouseHID` | USB-HID oder BLE-HID hinter einer Schnittstelle | – | – |
 | `Haptic` | Impuls-Sequenzer für den Vibrationsmotor | – | – |
@@ -177,7 +177,7 @@ und damit auf dem PC testbar.
 | Datei | Inhalt |
 |---|---|
 | **[docs/Programmcode.md](docs/Programmcode.md)** | Aufbau und Funktionsweise ausführlich, mit den Begründungen hinter den Entscheidungen |
-| [docs/Altlasten.md](docs/Altlasten.md) | Bestandesaufnahme aller Module und was daran aufgeräumt wurde |
+| [docs/EdgeImpulse.md](docs/EdgeImpulse.md) | Anleitung, wie das Klassifikationsmodell aufgenommen und trainiert wird |
 | [include/config.h](include/config.h) | alle Einstellwerte, nach Themen gruppiert, mit Einheit und Begründung |
 | [TODO.md](TODO.md) | laufendes Arbeitsjournal: offene Messungen und Entscheide |
 | [CLAUDE.md](CLAUDE.md) | Kurzfassung der Projektregeln für die Arbeit am Code |

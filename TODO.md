@@ -1,7 +1,46 @@
 # TODO – Air Mouse Firmware
 
-## ENTSCHEID: finales ML-Modell (aktuell nur Probemodell vorhanden)
-**Stand:** Probemodell = Spectral-Analysis-FFT-Merkmale (5 Kanäle) + Netz, 3 Klassen,
+## ERLEDIGT: Modellentscheid — Rohsignal + 1D-CNN
+
+**Stand:** Studio-Projekt **1084395**, Export **v3**, liegt in `lib/ei-model/`.
+2 Klassen (`non_pinch`, `pinch`), 5 Kanäle, Fenster 40 Samples @ 209 Hz (191 ms),
+**Rohsignal + 1D-CNN**, int8. Struktur unverändert gegenüber v1, nur mehr Trainingsdaten —
+der Tausch brauchte keine Codeänderung.
+
+- [ ] **Die Kennzahlen unten stammen noch von v1.** Nach dem Test von v3 die Werte aus
+  *Model testing* hier ersetzen (Recall, Precision, F1, AUC, Falsch-Positive) — sonst
+  stehen in der Arbeit die Zahlen des falschen Modells.
+
+| Kennzahl | Wert |
+|---|---|
+| Pinch-Recall / Precision / F1 | 87.5 % / ~94.8 % / **0.91** |
+| Falsch-Positive (`non_pinch → pinch`) | 0.1 % |
+| AUC | 0.94 |
+| Inferenz / RAM / Flash (EI-Schätzung) | 3 ms / 4 KB / 32 KB |
+| Flash gesamt | 18.1 % → **14.4 %** |
+
+`cfg::ML_CONFIDENCE` wurde deswegen von 0.65 auf **0.50** gesenkt: AUC 0.94 bei 0.1 %
+Falsch-Positiven heisst, die Trennung ist besser als die alte Schwelle ausnutzte.
+
+Der Vorgänger (1036761, 3 Klassen, Spectral Analysis + MLP) liegt in
+`archive/ei-model-1036761/` — ausserhalb von `lib/`, wird also nicht mehr gebaut.
+
+**Noch offen:**
+- [ ] `ei_us` am Gerät messen. Die 3 ms sind eine Schätzung; prüfen, gegen welchen
+  Takt Edge Impulse sie gerechnet hat (80 MHz statt 64 MHz wären Faktor 1.25). Bei
+  4785 µs Taktbudget sind 3 ms bereits 63 %.
+- [ ] `ovr` beim Pinchen beobachten — bleibt er 0, hält die Schleife den Takt.
+- [ ] `nClick` nach einer Stunde normaler Arbeit: hält die gesenkte Schwelle?
+- [ ] Ein Vergleichslauf mit 3 Klassen für Kapitel 2.4 (`negative → pinch` sichtbar
+  machen) und einer mit Spectral Analysis + MLP auf denselben Daten.
+- [x] **Im Binary nachgewiesen:** 14 `arm_convolve_*`/`arm_depthwise_*`-Kernel,
+  2 `arm_fully_connected_*`, **0** `arm_rfft_*`/`arm_cfft_*`. Beim alten Modell war es
+  genau umgekehrt (nur fully_connected und FFT) — das Binary belegt also unabhängig vom
+  Studio, dass jetzt ein CNN auf dem Rohsignal läuft und der Spektralpfad weg ist.
+  Nachprüfen mit `arm-none-eabi-nm .pio/build/xiaoblesense/firmware.elf`.
+
+### Alter Stand (erledigt, zur Nachvollziehbarkeit)
+Probemodell = Spectral-Analysis-FFT-Merkmale (5 Kanäle) + Netz, 3 Klassen,
 int8, ~196-ms-Fenster (41 Werte @ 209 Hz), K-Means-Anomalie aktiv.
 
 **Empfehlung (Literatur, Consensus Juli 2026):**
@@ -96,6 +135,135 @@ unruhigsten Moment genommen werden. Taugt als Beispiel für Kap. 6.
   entscheiden (Casiez et al. 2008: zu niedrig schadet klar, zu hoch kaum).
 - [ ] **`mvfail`** beobachten – steigt der Zähler, gehen Pakete an BLE verloren.
 
+## Versuch 0 — der ML-Weg (vor allen Sensor-Experimenten)
+
+Die bisherige Messung hat einen **Schwellwert auf einem abgeleiteten Kanal** widerlegt
+(`env`, Hochpass ab 30 Hz, alles auf einen Betrag heruntergerechnet). Sie hat *nicht*
+geprüft, ob ein Klassifikator auf den fünf Rohkanälen das Lösen findet — der sieht die
+zeitliche Form und die Korrelation zwischen den Achsen, nicht nur eine Amplitude.
+Doublepoint erreicht mit genau diesem Ansatz 94–97 % auf dem Kontakt, ohne Kalibrierung.
+
+**Wichtig: als eigenes Edge-Impulse-Projekt, nicht im produktiven Modell.** Die Frage darf
+das laufende Klick-Modell nicht gefährden.
+
+### Sondierung (zwei Klassen, eine Aufnahmesitzung)
+
+- [ ] Projekt mit genau zwei Klassen: `hold` (Pinch geschlossen halten, Arm ruhig) gegen
+  `idle` (Hand entspannt, Arm ruhig). Je rund 40 Wiederholungen — das ist die
+  Grössenordnung aus putEMG, eine belegte Untergrenze gibt es in der Literatur nicht.
+- [ ] **Kriterium:** trennt das Modell die beiden? Nein → die statische Klasse kollabiert
+  in Idle, der ML-Weg zum *Halten* ist tot, und nur noch das *Lösen* ist interessant.
+- [ ] Zweite Sondierung mit `release` gegen `negative`: das Lösen ist ein Ereignis, kein
+  Zustand, und hat damit bessere Aussichten als `hold`.
+
+### Wenn es trägt: ins produktive Modell
+
+- [ ] Verarbeitungsblock von **Spectral Analysis auf rohe Zeitreihen** umstellen und ein
+  1D-CNN trainieren. Damit ist die seit langem offene Bau-Entscheidung oben entschieden,
+  und zwar belegt: rohe Zeitreihen generalisieren bei kleinen Einzelnutzer-Datensätzen
+  besser als handgebaute Spektralmerkmale (Jaén-Vargas et al. 2022, Startsev et al. 2018);
+  LSTM bleibt wegen des nRF52840 draussen (Saha & Samanta 2026).
+- [ ] Fensterlänge bleibt bei 196 ms (41 Samples @ 209 Hz) — die Literatur findet 200 ms
+  mit 50 % Überlappung optimal, kleinere Fenster verschlechtern den F1-Wert.
+- [ ] Negativklasse bewusst entwerfen: **Armbewegung ohne Pinch** ist der wichtigste Fall
+  und in der Literatur nirgends behandelt. Dazu die Hard Negatives von oben (Tippen,
+  Klopfen, Klatschen, Türklinke, Gehen).
+
+### Die Messgrösse, die in keiner Studie steht
+
+- [ ] **Fehlauslösungen pro Stunde normaler Nutzung.** Die Literatur berichtet
+  ausschliesslich Klassifikationsgenauigkeit auf isolierten Gesten, nie
+  Falsch-Positiv-Raten im Dauerbetrieb. Eine Geste mit 97 % Trefferquote kann unbrauchbar
+  sein, wenn sie zehnmal pro Stunde von allein auslöst. Der Zähler `nClick` im Teleplot
+  liefert das direkt: eine Stunde normal am Rechner arbeiten, ohne bewusst zu pinchen.
+
+**Für die Arbeit:** die Recherche meldet vier offene Punkte — Onset gegen Release als
+getrennte Klassen, Fenster unter 100 ms, Tragfähigkeit einer statischen Klasse, und
+Falsch-Positiv-Raten im Dauerbetrieb. Alle vier sind mit diesem Aufbau messbar, und die
+209 Hz liegen über den 100 Hz der meisten Studien, die selbst anmerken, dass kurze
+Transienten höhere Raten brauchen könnten. Das ist der eigenständige Beitrag der Arbeit.
+
+## Versuchsreihe: lässt sich der GEHALTENE Pinch doch erkennen?
+
+Die eine Frage, an der alles hängt: **kann das Ziehen durch Öffnen der Finger enden statt
+durch einen zweiten Pinch?** Drei Versuche, nach Aufwand geordnet. Jeder hat ein
+Abbruchkriterium — fällt er negativ aus, ist der nächste dran, nicht eine Verfeinerung.
+
+Randbedingung: das PDM-Mikrofon wird aus **Datenschutzgründen bewusst nicht benutzt**,
+obwohl es verbaut ist. Der Preis dafür ist belegbar (Posatskiy et al. 2012: Mikrofone sind
+weniger bewegungsartefaktanfällig als Beschleunigungssensoren) und gehört so in die Arbeit.
+
+### Versuch 1 — MMG-Plateau (kein neuer Code, keine Hardware)
+
+Ein kontrahierender Muskel vibriert im Band 30–90 Hz (Abbas et al. 2025, 200 Hz Abtastung
+— dein Gerät läuft mit 208 Hz, und der Hochpass der Hüllkurve liegt bei 30 Hz, also genau
+an der unteren Bandgrenze).
+
+`DEBUG_SET = DEBUG_ENV`, Kanäle `env`/`envMax`:
+
+- [ ] Pinch schliessen, **3 s halten**, Arm ruhig. Dann entspannen, 3 s ruhig halten.
+- [ ] **Kriterium:** liegt `env` während des Haltens auf einem sichtbar erhöhten Plateau
+  gegenüber der Ruhe? Der Kontakt-Impuls ist nur die Spitze am Anfang — es zählt, worauf
+  die Kurve danach zurückfällt.
+- [ ] Einmal mit **fest angezogenem**, einmal mit lockerem Band. Wächst der Unterschied mit
+  dem Anzug, ist die Hautkopplung der Hebel und nicht der Sensor (Siddiqui & Chan 2020).
+- [ ] Falls positiv: vierte Klasse `hold` in Edge Impulse aufnehmen. `COLLECT_MODE`
+  streamt bereits die richtigen Kanäle, `env` ist Kanal 0 — kein Firmware-Umbau nötig.
+
+### Versuch 2 — Motor als Erreger, IMU als Empfänger (kleiner Code, keine Hardware)
+
+Schliessen sich Daumen und Zeigefinger, bildet die Hand eine geschlossene mechanische
+Schleife; ihre Übertragungsfunktion ändert sich. Gemessen wird nicht der Muskel, sondern
+die **Mechanik der Hand** — damit unabhängig von der Hautkopplung, an der Versuch 1
+scheitern kann.
+
+Belegt ist das Prinzip nur mit Lautsprecher und Mikrofon (EchoWrist: 97.6 % über 12
+Interaktionen; Amesaka et al.: 83.9 % F-Score über 11 Gesten mit Ultraschall-Sweep).
+**Motor plus IMU steht so nicht in der Literatur** — der Versuch ist insofern eigenständig.
+
+- [ ] Haptik-Pin per PWM ansteuern statt nur digital (nRF52840 kann das an D1). Die
+  Drehzahl eines ERM-Motors hängt an der Spannung, damit ist ein grober Frequenz-Sweep
+  möglich — ohne Sweep bleibt nur eine feste Anregungsfrequenz.
+- [ ] Anregung 200 ms, dabei `accMag` aufzeichnen. Je 20 Durchgänge mit **offener** und mit
+  **geschlossener** Hand, Arm ruhig.
+- [ ] **Kriterium:** unterscheiden sich Amplitude oder spektraler Schwerpunkt der Antwort
+  systematisch? Dann ist ein Klassifikator sinnvoll, sonst nicht.
+- [ ] Nur bei Erfolg: dasselbe **während Armbewegung** wiederholen. Das ist die eigentliche
+  Hürde — beim Ziehen bewegt sich der Arm per Definition.
+- [ ] Nebengedanke, falls es trägt: der Erinnerungsimpuls des Ziehens könnte zugleich der
+  Prüfimpuls sein. Zwei Funktionen, ein Brummen.
+
+### Versuch 3 — Kraftsensor im Band (ein Bauteil, ein Analogpin)
+
+Esposito et al. 2018: ein piezoresistiver Kraftsensor auf der Haut über dem Beuger
+korreliert mit r > 0.9 gegen EMG. Ein FSR kostet wenige Franken und braucht einen der
+freien Pins A0/A2/A3.
+
+- [ ] Nur angehen, wenn 1 und 2 negativ ausfallen — es ist der einzige Weg mit neuer
+  Hardware, dafür der mit der höchsten Erfolgswahrscheinlichkeit.
+- [ ] Offene Frage ist die mechanische Integration ins Band, nicht die Elektronik.
+
+### Was NICHT verfolgt wird, und warum
+
+- **Magnet am Finger + Magnetometer:** 16–25 mm Positionsfehler bei Pinch (Yang et al.
+  2021), und es verlangt ein Bauteil an der Hand — das widerspricht dem Grundgedanken,
+  dass am Finger nichts sitzt.
+- **Kapazitive Handgelenks-Topographie:** in der Literatur die beste Option ohne Bauteil am
+  Finger (Rudolph et al. 2022: 81–85 % über 6 Griffe, 89–97 % über Zustände innerhalb einer
+  Interaktion), braucht aber ein eigenes Elektrodenband. Zu grosser Umbau für den Rahmen
+  der Arbeit; als Ausblick erwähnenswert.
+- **Bioimpedanz:** in der Recherche keine belastbaren Zahlen für gehaltene Fingerposen.
+
+### Und wenn alles negativ ausfällt
+
+Dann bleibt das Ziehen bei „kneifen, ziehen, kneifen" — was bereits gebaut ist. Die
+Versuchsreihe ist damit kein Risiko für den Zeitplan, sondern eine mögliche Verbesserung
+mit klar begrenztem Aufwand. **Selbst bei Erfolg** sollte der zweite Pinch als Ende
+erhalten bleiben: alle IMU-only-Zahlen der Literatur liegen bei 75–85 %, und eine Taste,
+die bei jedem siebten Mal klebt, ist schlechter als eine, die einen bewussten zweiten Griff
+verlangt. Das erkannte Loslassen wäre dann die *frühere*, bequemere Freigabe — und ein
+verpasstes Loslassen kein Fehler, sondern nur ein späteres Ende.
+
 ## ERLEDIGT: Löse-Impuls gemessen — taugt nicht
 
 **Befund:** eine zweite Spitze gibt es *teilweise*, bei **kurzem Pinch gar nicht**, und sie
@@ -135,7 +303,7 @@ Erklärung für den doppelten Rechtsklick ebenso in Frage kam.
   0.005–0.02. Liegt das Lösen dazwischen, braucht es eine eigene, tiefere Schwelle
   (`RELEASE_ENV`) — mit `ENV_ON` = 0.035 würde es sonst teilweise übersehen.
 - [ ] **Streuung über 20 Wiederholungen.** Daran hängt zugleich, ob der lange Pinch als
-  Rechtsklick taugt (siehe `docs/Bedienkonzept.md`, Stufe 2c).
+  eigene Geste taugt.
 - [ ] Gegenprobe mit einem *kurzen*, normalen Klick: wo landet der Löse-Impuls zeitlich
   relativ zum Kontakt? Das ist die Zahl, die `DEBOUNCE_MS` festlegt.
 
@@ -326,6 +494,68 @@ beide die Verdrehung im Zeiger, aber auf unterschiedliche Art – der Guard brem
 Bewegung während der Drehung ganz weg, die Kompensation rechnet die Verdrehung aus der
 Drehmatrix heraus, ohne die Bewegung selbst zu bremsen. Beide gegeneinander messen ist
 ein fertiger Abschnitt für Kap. 6, kein offener Ausblick mehr.
+
+## HEUTE: Aufnahmesitzung — Ablauf
+
+Die Firmware ist dafür fertig. `COLLECT_MODE` hält den festen 209-Hz-Takt (`app.begin()`
+läuft dort nicht, die IMU bleibt auf den 208 Hz aus `imu.begin()`), die Kanäle kommen aus
+`feat::pack()`, und die eingebaute LED latcht ab dem ersten verpassten Abtastschritt.
+
+**Umschalten und flashen:**
+
+```
+include/config.h:  #define COLLECT_MODE  true
+                   #define DEBUG_TELEPLOT false      // sonst mischt sich Teleplot ins CSV
+```
+```powershell
+& "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" run
+# danach flashen, dann:
+edge-impulse-data-forwarder --frequency 209
+```
+
+Der Forwarder fragt nach den Achsennamen. In der Reihenfolge von `feat::pack()`:
+`env, gyro, lax, lay, laz`. **Weicht die gemeldete Frequenz von 209 ab oder leuchtet die
+LED, nicht aufnehmen** — der Datensatz wäre zeitlich gedehnt, und dem CSV sieht man das
+nicht an.
+
+### Zwei Projekte, nicht eines
+
+- [ ] **Projekt A (produktiv):** `idle`, `negative`, `pinch`. Ersetzt den alten Datensatz,
+  der doppelt ungültig ist (100 Hz statt 209, rohe statt linearer Achsen).
+- [ ] **Projekt B (Sondierung):** `idle`, `hold`. Beantwortet die offene Frage, ohne das
+  produktive Modell zu gefährden. Falls B trägt, wandert `hold` später nach A.
+
+### Klassen und wie sie aufgenommen werden
+
+| Klasse | Projekt | Aufnahme | Zweck |
+|---|---|---|---|
+| `pinch` | A | kurze, zügige Pinches, Arm ruhig | der Klick |
+| `idle` | A + B | Hand entspannt, Arm ruhig gehalten | Grundlinie |
+| `negative` | A | Tippen, Klopfen, Klatschen, Türklinke, Gehen — **und Armbewegung ohne Pinch** | Fehlauslösungen |
+| `hold` | B | Pinch schliessen und über die ganze Aufnahme geschlossen halten, Arm ruhig | ist der gehaltene Pinch überhaupt sichtbar? |
+
+Rund 40 Wiederholungen je Klasse (Grössenordnung aus putEMG; eine belegte Untergrenze gibt
+es in der Literatur nicht — das ist eine der Lücken, die diese Arbeit schliessen kann).
+
+**Armbewegung ohne Pinch ist der wichtigste Negativfall** und in keiner der recherchierten
+Studien behandelt. Ohne ihn lernt das Modell, jede Bewegung sei ein Kandidat.
+
+### Validierung der Haltungsunabhängigkeit
+
+- [ ] Der Grossteil der `pinch`-Daten in Zeige-Haltung; zusätzlich ein Satz Pinches in der
+  **abgedrehten** Haltung, der **nur ins Test-Set** kommt. Fällt die Genauigkeit dort nicht
+  ab, ist die Gravitationsfreiheit der Kanäle belegt — eine belastbare Zahl für Kapitel 5
+  und zugleich die Erklärung, warum der Rechtsklick vorher nicht funktionierte.
+
+### Modellwahl (durch die Recherche entschieden)
+
+- [ ] Verarbeitungsblock **rohe Zeitreihen statt Spectral Analysis**, Lernblock **1D-CNN**.
+  Rohe Zeitreihen generalisieren bei kleinen Einzelnutzer-Datensätzen besser
+  (Jaén-Vargas et al. 2022, Startsev et al. 2018); LSTM bleibt wegen des nRF52840 draussen.
+- [ ] Fenster **196 ms** (41 Samples @ 209 Hz) mit 50 % Überlappung beibehalten — die
+  Literatur findet 200 ms optimal, kleinere Fenster verschlechtern den F1-Wert.
+- [ ] Nach dem Training `COLLECT_MODE` zurück auf `false`, Modellordner `lib/ei-model/`
+  komplett ersetzen (nicht von Hand editieren).
 
 ## Aufnahmeprotokoll für den neuen Datensatz
 

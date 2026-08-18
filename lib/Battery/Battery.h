@@ -30,8 +30,7 @@ public:
     float volts() const { return volts_; }
 
 private:
-    // Der ADC rauscht; gemittelt wird ueber mehrere Wandlungen. Als Konstante,
-    // weil Schleife und Teiler zwingend dieselbe Zahl brauchen.
+    // Der ADC rauscht; gemittelt wird ueber mehrere Wandlungen.
     static constexpr int kOversample = 8;
 
     bool     everRun_ = false;   // sonst wartet die erste Messung ein Intervall

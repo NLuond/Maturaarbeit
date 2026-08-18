@@ -1,22 +1,16 @@
 # Testrunner fuer `pio test -e native`.
 #
-# Die Tests dieses Projekts benutzen kein Unity und keinen anderen Rahmen: jede
-# Datei unter test/ ist ein eigenstaendiges C++-Programm mit eigenem main(),
-# das seine Pruefungen selbst zaehlt, Fehler zeilenweise meldet und am Ende
-# eine Zusammenfassung ausgibt:
+# Die Tests benutzen keinen Rahmen: jede Datei unter test/ ist ein
+# eigenstaendiges C++-Programm mit eigenem main(), das seine Pruefungen zaehlt
+# und so ausgibt:
 #
 #     FEHLER Zeile 42: die Bremse oeffnet zu frueh
 #     117 Pruefungen, 1 Fehler
 #
-# Das ist Absicht. Die Tests bleiben damit gewoehnliche Programme, die sich
-# ohne PlatformIO mit einem einzigen g++-Aufruf uebersetzen und starten
-# lassen - die Zeile dafuer steht im Kopf jeder Testdatei. Ein Rahmen wie
-# Unity haette diese Eigenschaft gekostet, ohne fuer Pruefungen dieser Art
-# etwas beizutragen.
-#
-# Dieser Runner uebersetzt das Ausgabeformat in die Ergebnisse, die PlatformIO
-# anzeigt: jede FEHLER-Zeile wird ein fehlgeschlagener Testfall, die
-# Zusammenfassung ein bestandener, wenn null Fehler gemeldet wurden.
+# Damit bleiben es Programme, die sich auch mit einem einzigen g++-Aufruf
+# uebersetzen lassen. Dieser Runner uebersetzt das Format in PlatformIO-
+# Testfaelle: jede FEHLER-Zeile ein fehlgeschlagener, die Zusammenfassung ein
+# bestandener Fall.
 
 import re
 

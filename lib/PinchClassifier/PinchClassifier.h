@@ -13,9 +13,8 @@
 #include "model-parameters/model_metadata.h"
 #include "edge-impulse-sdk/classifier/ei_run_classifier.h"
 
-// Das Modell wurde auf einer festen Abtastrate trainiert. Laeuft die Schleife
-// schneller oder langsamer, sieht der Klassifikator ein zeitlich gestauchtes
-// oder gedehntes Fenster und die gelernten Frequenzmerkmale stimmen nicht mehr.
+// Das Modell wurde auf einer festen Abtastrate trainiert: laeuft die Schleife
+// anders, sieht der Klassifikator ein zeitlich verzerrtes Fenster.
 static_assert(cfg::SAMPLE_INTERVAL_US > EI_CLASSIFIER_INTERVAL_MS * 1000.0 - 25.0 &&
               cfg::SAMPLE_INTERVAL_US < EI_CLASSIFIER_INTERVAL_MS * 1000.0 + 25.0,
               "cfg::SAMPLE_INTERVAL_US passt nicht zur Abtastrate des Modells");
@@ -44,8 +43,7 @@ public:
         numpy::signal_from_buffer(ordered_, FRAME_SIZE, &signal);
 
         ei_impulse_result_t result = { 0 };
-        // Selbst gestoppt statt result.timing: dessen Felder sind auf ganze
-        // Millisekunden gerundet und damit hier zu grob.
+        // Selbst gestoppt: result.timing rundet auf ganze Millisekunden.
         const uint32_t t0 = micros();
         err_ = run_classifier(&signal, &result, false);
         lastUs_ = micros() - t0;

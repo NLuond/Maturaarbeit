@@ -39,10 +39,8 @@ void setup() {
     pinMode(PIN_LSM6DS3TR_C_INT1, INPUT);
 
     // Erst hier, nicht am Anfang von setup(): die SoftDevice wird von
-    // Bluefruit.begin() in mouse.begin() hochgefahren. Ein SVC ohne laufende
-    // SoftDevice faellt im schlimmsten Fall in den voreingestellten
-    // SVC_Handler des Kerns - und der ist eine Endlosschleife. Deshalb nach
-    // Uebertragungsweg getrennt und innerhalb dieses !COLLECT_MODE-Zweigs.
+    // Bluefruit.begin() in mouse.begin() hochgefahren, und ein SVC ohne laufende
+    // SoftDevice faellt in den SVC_Handler des Kerns - eine Endlosschleife.
 #if USE_BLE_HID
     sd_power_dcdc_mode_set(NRF_POWER_DCDC_ENABLE);
 #else
@@ -50,10 +48,9 @@ void setup() {
 #endif
 #endif
 #if COLLECT_MODE
-    // Aufnahme-Warnleuchte, aktiv LOW. Sie geht an, sobald ein Abtastschritt
-    // verpasst wurde, und bleibt bis zum Reset an: leuchtet sie nach der
-    // Aufnahme, ist der Datensatz zeitlich gedehnt und wird verworfen - der
-    // CSV selbst sieht man das nicht an.
+    // Aufnahme-Warnleuchte, aktiv LOW: sie geht bei einem verpassten
+    // Abtastschritt an und bleibt bis zum Reset an. Leuchtet sie danach, ist der
+    // Datensatz zeitlich gedehnt - dem CSV selbst sieht man das nicht an.
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, HIGH);
 #endif
@@ -67,14 +64,13 @@ static void onMotion() { resumeLoop(); }
 static void sleepUntilMotion() {
     attachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1), onMotion, RISING);
     // INT1 haelt dank LIR eine Flanke, die zwischen dem Scharfstellen und hier
-    // gefallen ist. Ohne die Pruefung ginge sie verloren: vTaskResume zaehlt
-    // nicht, ein Resume vor dem Suspend ist weg. INT1 ist aktiv HIGH, LOW
-    // heisst also "nichts steht an".
+    // gefallen ist. Ohne die Pruefung ginge sie verloren: ein Resume vor dem
+    // Suspend zaehlt nicht. INT1 ist aktiv HIGH.
     if (digitalRead(PIN_LSM6DS3TR_C_INT1) == LOW) suspendLoop();
     detachInterrupt(digitalPinToInterrupt(PIN_LSM6DS3TR_C_INT1));
 
     // millis() und nicht micros()/1000: der Quotient laeuft schon bei
-    // 4'294'967 ueber. Beide Uhren stammen aus demselben FreeRTOS-Tick.
+    // 4'294'967 ueber.
     app.onWake(millis());
 }
 #endif
@@ -82,19 +78,16 @@ static void sleepUntilMotion() {
 void loop() {
     // Warten statt leer durchlaufen: der Kern ruft loop() sonst in einer engen
     // Schleife mit 64 MHz auf. delay() ruft vTaskDelay, und mit
-    // configUSE_TICKLESS_IDLE schlaeft der Kern dabei tatsaechlich.
-    //
-    // micros() ist auf diesem Kern aus dem FreeRTOS-Tick abgeleitet (1024 Hz,
-    // rund 977 us je Schritt) - eine Warteschleife koennte den Takt gar nicht
-    // feiner treffen als vTaskDelay, sie wuerde nur Strom verbrennen.
+    // configUSE_TICKLESS_IDLE schlaeft der Kern dabei tatsaechlich. Feiner
+    // treffen liesse sich der Takt ohnehin nicht - micros() stammt hier aus dem
+    // FreeRTOS-Tick (1024 Hz, rund 977 us je Schritt).
     while ((int32_t)(nextSample_us - micros()) > 0) delay(1);
 
     const uint32_t now_us = micros();
 
 #if DEBUG_TELEPLOT && !COLLECT_MODE
     // Verspaetung dieses Takts, gemessen BEVOR nextSample_us weitergestellt
-    // wird. ovr schlaegt erst bei einem ganzen verpassten Takt aus; dieser
-    // Kanal zeigt auch kleineres Zittern.
+    // wird. ovr schlaegt erst bei einem ganzen verpassten Takt aus.
     const int32_t lateUs = (int32_t)(now_us - nextSample_us);
 #endif
 
@@ -110,8 +103,8 @@ void loop() {
 #endif
 
     // Feste Schrittweite statt der tatsaechlich verstrichenen Zeit: alle Filter
-    // und das ML-Fenster brauchen eine konstante Abtastrate. Nach einer
-    // Stockung wird neu ausgerichtet, statt die Rueckstaende nachzuholen.
+    // und das ML-Fenster brauchen eine konstante Abtastrate. Nach einer Stockung
+    // wird neu ausgerichtet, statt die Rueckstaende nachzuholen.
     nextSample_us += tickUs;
     if ((int32_t)(now_us - nextSample_us) > (int32_t)tickUs) {
         nextSample_us = now_us + tickUs;
@@ -126,9 +119,8 @@ void loop() {
     const ImuSample s = imu.read(tickDt);
 
 #if COLLECT_MODE
-    // Dieselbe Rate und dieselben Kanaele wie der Inferenz-Pfad, sonst lernt
-    // das Modell auf anderen Daten, als es spaeter sieht. Die Kanaele kommen
-    // deshalb aus feat::pack().
+    // Dieselbe Rate und dieselben Kanaele wie der Inferenz-Pfad, sonst lernt das
+    // Modell auf anderen Daten, als es spaeter sieht.
     static VibrationEnvelope envelope;
 
     const float env = envelope.update(s.accMag, cfg::DT);
@@ -158,9 +150,9 @@ void loop() {
     if (app.wantsSleep()) {
         sleepUntilMotion();
         // Nach dem Schlaf liegt nextSample_us beliebig weit in der
-        // Vergangenheit; ohne Neuausrichtung liefe die Schleife erst tausende
-        // Overrun-Korrekturen ab. tickUs und nicht SAMPLE_INTERVAL_US: der
-        // Automat ist nach dem Aufwachen in BEREIT.
+        // Vergangenheit; ohne Neuausrichtung liefe die Schleife tausende
+        // Overrun-Korrekturen ab. tickUs, weil der Automat nach dem Aufwachen in
+        // BEREIT ist.
         nextSample_us = micros() + tickUs;
     }
 #endif

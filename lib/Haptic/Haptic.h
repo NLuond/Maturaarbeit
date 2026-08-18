@@ -2,16 +2,13 @@
 #include <Arduino.h>
 #include "config.h"
 
-// Impuls-Sequenzer: n Impulse a HAPTIC_MS mit HAPTIC_GAP_MS dazwischen.
-// Ein Impuls bedeutet Linksklick, Haltungswechsel oder Ein/Aus, zwei bedeuten
-// Rechtsklick.
-//
-// Der Ausgang wird rein digital geschaltet, nicht per PWM: es gibt keine
-// Intensitaetsstufe, die Information steckt in der Anzahl der Impulse.
+// Impuls-Sequenzer: n Impulse a pulseMs mit HAPTIC_GAP_MS dazwischen. Der
+// Ausgang wird rein digital geschaltet, nicht per PWM - es gibt keine
+// Intensitaetsstufe, die Information steckt in Anzahl und Dauer der Impulse.
 //
 // Gesperrt ist genau, solange ein Muster laeuft, plus HAPTIC_REST_MS danach -
-// eine feste Sperrfrist muesste ueber der Musterdauer liegen und wuerde einen
-// Doppelklick nur noch einmal brummen lassen.
+// eine feste Sperrfrist muesste ueber der Musterdauer liegen und liesse einen
+// Doppelklick nur noch einmal brummen.
 class Haptic {
 public:
     void begin() {
@@ -19,9 +16,8 @@ public:
         digitalWrite(cfg::HAPTIC_PIN, LOW);
     }
 
-    // pulseMs: Dauer eines einzelnen Impulses. Ein/Aus benutzt einen langen,
-    // damit es sich von jedem Klickmuster abhebt, ohne dass die Anzahl der
-    // Impulse wachsen muss - vier kurze verschmelzen ohnehin zu einem Brummen.
+    // Ein/Aus benutzt einen langen Impuls, damit es sich von jedem Klickmuster
+    // abhebt - vier kurze verschmelzen ohnehin zu einem Brummen.
     void trigger(uint32_t now_ms, uint8_t pulses = 1,
                  uint32_t pulseMs = cfg::HAPTIC_MS) {
         if (pulses == 0) return;

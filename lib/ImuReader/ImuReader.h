@@ -26,14 +26,10 @@ public:
     }
 
     ImuSample read(float dt) {
-        // Ein Burst statt sechs Einzeltransaktionen: ab OUTX_L_G folgen
-        // luecklos Gyro X/Y/Z und Accel X/Y/Z. Alle sechs Werte stammen damit
-        // aus demselben Abtastzeitpunkt - bei Einzelzugriffen lagen zwischen
-        // dem ersten und dem letzten rund 2 ms.
-        //
-        // Initialisiert, weil der Rueckgabestatus verworfen wird: eine
-        // fehlgeschlagene Transaktion liefert so ein erkennbar falsches Sample
-        // (alles null) statt undefinierter Werte.
+        // Ein Burst statt sechs Einzeltransaktionen: ab OUTX_L_G folgen luecklos
+        // Gyro X/Y/Z und Accel X/Y/Z, alle aus demselben Abtastzeitpunkt (bei
+        // Einzelzugriffen lagen rund 2 ms dazwischen). Initialisiert, damit eine
+        // fehlgeschlagene Transaktion ein erkennbar falsches Sample liefert.
         uint8_t raw[12] = {0};
         imu_.readRegisterRegion(raw, LSM6DS3_ACC_GYRO_OUTX_L_G, 12);
 
@@ -46,9 +42,8 @@ public:
         s.ay = imu_.calcAccel(readS16(raw,  8));
         s.az = imu_.calcAccel(readS16(raw, 10));
 
-        // Erdbeschleunigung schaetzen und abziehen. Eine gehaltene Haltung
-        // aendert sich unter 1 Hz, die Beschleunigung beim Zeigen und Pinchen
-        // deutlich darueber.
+        // Erdbeschleunigung schaetzen und abziehen: eine gehaltene Haltung
+        // aendert sich unter 1 Hz, die Bewegung beim Zeigen und Pinchen darueber.
         s.lax = s.ax - lpGx_.run(s.ax, dt);
         s.lay = s.ay - lpGy_.run(s.ay, dt);
         s.laz = s.az - lpGz_.run(s.az, dt);
@@ -78,11 +73,10 @@ public:
         setOdr(LSM6DS3_ACC_GYRO_CTRL2_G,  odrG);
     }
 
-    // Weckt ueber INT1, sobald sich die Beschleunigung um mehr als die Schwelle
-    // aendert. TAP_CFG1 Bit 7 gibt die einfachen Interrupts frei, Bit 0 ist LIR:
-    // INT1 bleibt stehen, bis WAKE_UP_SRC gelesen wird. Ohne die Verriegelung
-    // gaebe es nur eine kurze Flanke, und faellt die zwischen attachInterrupt()
-    // und suspendLoop(), ist sie verloren.
+    // Weckt ueber INT1, sobald die Beschleunigung die Schwelle ueberschreitet.
+    // TAP_CFG1 Bit 7 gibt die einfachen Interrupts frei, Bit 0 ist LIR: INT1
+    // bleibt stehen, bis WAKE_UP_SRC gelesen wird. Ohne die Verriegelung ginge
+    // eine Flanke zwischen attachInterrupt() und suspendLoop() verloren.
     void enableWakeOnMotion() {
         imu_.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_DUR, 0x00);
         imu_.writeRegister(LSM6DS3_ACC_GYRO_WAKE_UP_THS, cfg::WAKE_UP_THRESHOLD);
@@ -106,13 +100,10 @@ private:
         return (int16_t)((uint16_t)raw[i + 1] << 8 | raw[i]);
     }
 
-    // Ein MEMS-Gyroskop zeigt auch im Stillstand nicht exakt null, und der
-    // Fehler wandert mit der Temperatur. Ein Tiefpass entfernt ihn nicht - er
-    // ist keine Schwankung, sondern ein Versatz. Also lernen, solange das Geraet
-    // ruhig liegt, und abziehen; ohne das wandert der Cursor von allein.
-    //
-    // Die zweite Bedingung schliesst eine gleichfoermige Drehung ohne
-    // Drehratenanteil aus: ein ruhendes Board misst genau 1 g.
+    // Der Nullpunkt eines MEMS-Gyroskops ist ein Versatz, kein Rauschen - ein
+    // Tiefpass entfernt ihn nicht. Also im Stillstand lernen und abziehen, sonst
+    // wandert der Cursor von allein. Die zweite Bedingung schliesst eine
+    // gleichfoermige Drehung aus: ein ruhendes Board misst genau 1 g.
     void updateBias(const ImuSample& s, float rawX, float rawY, float rawZ, float dt) {
         if (s.gyroSum >= cfg::BIAS_STILL_DPS) return;
         if (fabsf(s.accMag - 1.f) >= cfg::BIAS_ACC_TOL) return;

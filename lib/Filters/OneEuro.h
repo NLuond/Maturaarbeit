@@ -7,16 +7,14 @@
 // er und erzeugt kaum Verzoegerung.
 //
 // Abweichung vom Original: dort wird die Geschwindigkeit aus dem verrauschten
-// Positionssignal geschaetzt, hier ist sie die Messgroesse selbst - das Gyroskop
-// liefert die Drehrate direkt. Die Ableitungsstufe entfaellt deshalb, der
-// Tiefpass auf der Geschwindigkeit (dCutoff) aber nicht: ohne ihn folgt die
-// Grenzfrequenz dem Betrag des Signals und steht bei Handzittern genau auf den
-// Spitzen am weitesten offen.
+// Positionssignal geschaetzt, hier liefert das Gyroskop sie direkt. Die
+// Ableitungsstufe entfaellt deshalb, der Tiefpass auf der Geschwindigkeit
+// (dCutoff) aber nicht - ohne ihn stuende die Grenzfrequenz bei Handzittern
+// genau auf den Spitzen am weitesten offen.
 class OneEuroFilter {
 public:
-    // minCutoff in Hz, beta in Hz pro Einheit von speed, dCutoff in Hz.
-    // dCutoff hat bewusst keinen Vorgabewert: er soll an jeder Aufrufstelle
-    // sichtbar sein.
+    // minCutoff in Hz, beta in Hz pro Einheit von speed, dCutoff in Hz - ohne
+    // Vorgabewert, damit er an jeder Aufrufstelle sichtbar ist.
     OneEuroFilter(float minCutoff, float beta, float dCutoff)
         : minCutoff_(minCutoff), beta_(beta), dCutoff_(dCutoff) {}
 

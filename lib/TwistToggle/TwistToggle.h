@@ -2,107 +2,87 @@
 #include <stdint.h>
 #include <math.h>
 
-// Ein/Aus durch eine Drehgeste des Unterarms. Dieselbe Ausdrehung traegt drei
-// Bedeutungen, unterschieden allein durch das, was danach passiert:
+// Ein/Aus durch eine Drehgeste des Unterarms. Die Ausdrehung hat genau EINE
+// Bedeutung:
 //
-//   raus und binnen maxMs zurueck, nichts dazwischen  -> Toggle (Ein/Aus)
-//   raus, Erschuetterung dazwischen (cancel())        -> nichts, das war ein Pinch
-//   raus und laenger als maxMs gehalten               -> Held (Scroll-Modus)
+//   raus und zurueck, die ganze Bewegung binnen maxMs  -> Toggle (Ein/Aus)
+//   Erschuetterung, waehrend der Unterarm dabei ruhte  -> nichts, das war ein Pinch
+//   alles andere                                       -> nichts
 //
-// Eine vierte Bedeutung ueber einen tieferen Scheitelwinkel (Ziehen) ist wieder
-// ausgebaut worden: sie lag auf derselben Achse wie Ein/Aus, und eine etwas zu
-// weit geratene Schaltgeste wurde dadurch stillschweigend zum Ziehen. Das
-// Ziehen haengt jetzt am Doppel-Pinch, siehe AirMouseState.
+// Wer laenger draussen bleibt, ist einfach in der Haltung Turned - die traegt
+// PoseDetector, nicht dieses Modul.
 //
-// Der Winkel kommt aus der Lageschaetzung und ist damit absolut; aus der
-// Drehrate integriert wuerde die Referenz wegdriften. Kehrseite: bei senkrecht
-// gehaltenem Unterarm ist die Verdrehung aus der Schwerkraft nicht beobachtbar,
-// deshalb muss level durchgehend gelten.
+// Zwei Groessen kommen herein, beide aus derselben Lageschaetzung. Der WINKEL
+// ist absolut und driftet nicht weg; aus der Drehrate integriert wuerde die
+// Referenz wandern. Die RATE sagt, ob sich der Unterarm gerade ueberhaupt
+// dreht, und trennt damit die Erschuetterung der Geste selbst - der Anschlag
+// am Scheitel - von der eines Pinch. Ohne diese Trennung verwarf der Anschlag
+// die eigene Geste, und weil der Controller nur im eingeschalteten Zustand
+// meldet, ging die Maus an, aber nicht wieder aus.
+//
+// Kehrseite des absoluten Winkels: bei senkrecht gehaltenem Unterarm ist die
+// Verdrehung aus der Schwerkraft nicht beobachtbar, deshalb muss level
+// durchgehend gelten.
 //
 // Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft.
 struct TwistTuning {
-    float    onDeg     =  70.f;   // ab hier gilt der Arm als abgedreht
-    float    backDeg   =  30.f;   // erst hier gilt er wieder als gerade
-    // Laenger draussen = keine Schaltgeste mehr, sondern der Scroll-Modus.
-    // 1000 ms waren zu knapp: eine bewusst gefuehrte Drehung raus UND zurueck
-    // braucht mehr, und wer sie verfehlt, bekommt keinen Hinweis - die Geste
-    // faellt lautlos aus.
-    uint32_t maxMs     = 1300;
+    float    onDeg     =  70.f;   // so weit muss die Ausdrehung reichen
+    float    backDeg   =  30.f;   // darunter gilt der Unterarm wieder als gerade
+
+    // Fenster fuer die GANZE Bewegung, gemessen ab dem Verlassen der
+    // Neutralzone. Frueher lief es erst ab onDeg, ein langsames Ausdrehen war
+    // damit gratis.
+    uint32_t maxMs     = 1400;
     uint32_t lockoutMs =  800;    // Ruhe nach einem Schaltvorgang
+
+    // Wann eine gemeldete Erschuetterung als Pinch zaehlt: nur wenn der
+    // Unterarm stillMs lang unter stillDps geblieben ist.
+    float    stillDps  =  40.f;   // Grad/s
+    uint32_t stillMs   =  150;    // ms
 };
 
 enum class TwistEvent : uint8_t {
     None,
-    Toggle,   // raus und zurueck innerhalb maxMs, nicht abgebrochen
-    Held      // maxMs ueberschritten, waehrend noch ausgedreht
+    Toggle    // raus und zurueck innerhalb maxMs, nicht abgebrochen
 };
 
 class TwistToggle {
 public:
     explicit TwistToggle(const TwistTuning& t = TwistTuning()) : t_(t) {}
 
-    // relTwistDeg: geglaettete Verdrehung gegenueber der Zeige-Haltung.
-    TwistEvent tick(float relTwistDeg, bool level, uint32_t now_ms) {
+    // relTwistDeg:  Verdrehung gegenueber der Zeige-Haltung, roh.
+    // twistRateDps: Betrag der Drehrate um die Unterarmachse (TwistGuard).
+    TwistEvent tick(float relTwistDeg, float twistRateDps, bool level, uint32_t now_ms) {
+        if (twistRateDps > t_.stillDps) tTurning_ = now_ms;
+
         // Betrag statt Vorzeichen: onDeg ist anatomisch nur in einer
         // Drehrichtung erreichbar, und welche das ist, muss der Code nicht
         // wissen.
         const float tilt = fabsf(relTwistDeg);
+        const bool  home = tilt <= t_.backDeg;
 
-        if (locked_) {
-            if (now_ms - tToggle_ < t_.lockoutMs) return TwistEvent::None;
-            locked_ = false;
-        }
-
-        if (!level) {
-            // Zaehlen, damit eine hier verschluckte Geste im Teleplot sichtbar
-            // wird: sie scheitert sonst lautlos und sieht wie Unzuverlaessigkeit
-            // aus. Gleiches Muster wie die Zaehler in PinchDetector.
-            if (out_ && !used_) nNotLevel_++;
-            out_  = false;
-            used_ = true;
-            return TwistEvent::None;
-        }
-
-        if (!out_) {
-            if (tilt > t_.onDeg) {
-                out_  = true;
-                used_ = false;
-                held_ = false;
-                tOut_ = now_ms;
-            }
-            return TwistEvent::None;
-        }
-
-        if (tilt < t_.backDeg) {
-            out_ = false;
-            const bool quick = (now_ms - tOut_) <= t_.maxMs;
-            if (quick && !used_ && !held_) {
-                tToggle_ = now_ms;
-                locked_  = true;
-                return TwistEvent::Toggle;
-            }
-            if (used_)       nCancelled_++;
-            else if (!quick && !held_) nTooSlow_++;
-            return TwistEvent::None;
-        }
-
-        if (!held_ && (now_ms - tOut_) > t_.maxMs) {
-            held_ = true;
-            return TwistEvent::Held;
-        }
-        return TwistEvent::None;
+        const TwistEvent e = step(tilt, home, level, now_ms);
+        wasHome_ = home;
+        return e;
     }
 
-    // Die laufende Ausdrehung schaltet nicht mehr: waehrenddessen lag eine
-    // Erschuetterung ueber der env-Schwelle, es war also ein Pinch.
-    void cancel() { used_ = true; }
+    // Der Controller meldet eine Erschuetterung ueber der Abbruchschwelle. OB
+    // sie die laufende Ausdrehung verbraucht, entscheidet dieses Modul: nur ein
+    // ruhender Unterarm kann gepincht haben, ein drehender erschuettert sich
+    // selbst.
+    void reportShock(uint32_t now_ms) {
+        if (phase_ != Phase::Out && phase_ != Phase::Back) return;
+        if (now_ms - tTurning_ >= t_.stillMs) used_ = true;
+    }
 
-    // Fuer den Teleplot-Kanal tw: 0 = gerade, 1 = ausgedreht,
-    // 2 = ausgedreht und verbraucht, 3 = Lockout.
+    // Fuer den Teleplot-Kanal tw: 0 = Ruhe, 1 = ausgedreht, 2 = auf dem
+    // Rueckweg, 3 = Lockout, 4 = verbraucht.
     uint8_t state() const {
-        if (locked_) return 3;
-        if (!out_)   return 0;
-        return used_ ? 2 : 1;
+        switch (phase_) {
+            case Phase::Idle:    return 0;
+            case Phase::Lockout: return 3;
+            default: return used_ ? 4 : (phase_ == Phase::Out ? 1 : 2);
+        }
     }
 
     // Warum eine Ausdrehung nicht geschaltet hat. Ohne diese Zaehler scheitert
@@ -112,13 +92,70 @@ public:
     uint16_t rejectedByTime()   const { return nTooSlow_; }
 
 private:
+    enum class Phase : uint8_t { Idle, Out, Back, Lockout };
+
+    TwistEvent step(float tilt, bool home, bool level, uint32_t now_ms) {
+        if (phase_ == Phase::Lockout) {
+            if (now_ms - tToggle_ < t_.lockoutMs) return TwistEvent::None;
+            phase_ = Phase::Idle;
+        }
+
+        if (phase_ == Phase::Idle) {
+            // Nur auf der Flanke aus der Neutralzone heraus: nach einem Abbruch
+            // muss der Unterarm erst wieder heim, sonst begaenne die verworfene
+            // Geste im Stand einfach neu.
+            if (level && wasHome_ && !home) {
+                phase_  = Phase::Out;
+                peak_   = tilt;
+                tStart_ = now_ms;
+                used_   = false;
+            }
+            return TwistEvent::None;
+        }
+
+        if (!level)                      return abort(nNotLevel_);
+        if (now_ms - tStart_ > t_.maxMs) return abort(nTooSlow_);
+
+        if (tilt > peak_) peak_ = tilt;
+
+        if (phase_ == Phase::Out) {
+            if (peak_ < t_.onDeg) {
+                // Zu flach und schon wieder daheim: Alltagsbewegung, kein
+                // Versuch. Zurueck auf Anfang, damit die naechste Geste ihr
+                // volles Fenster bekommt.
+                if (home) phase_ = Phase::Idle;
+            } else if (tilt < t_.onDeg) {
+                phase_ = Phase::Back;
+            }
+            return TwistEvent::None;
+        }
+
+        if (tilt > t_.onDeg) { phase_ = Phase::Out; return TwistEvent::None; }
+        if (!home)             return TwistEvent::None;
+
+        if (used_) return abort(nCancelled_);
+
+        phase_   = Phase::Lockout;
+        tToggle_ = now_ms;
+        return TwistEvent::Toggle;
+    }
+
+    // Gezaehlt wird nur, was auch ein Versuch war: eine Ausdrehung unter onDeg
+    // ist Alltagsbewegung und kein verschluckter Schaltvorgang.
+    TwistEvent abort(uint16_t& counter) {
+        if (peak_ >= t_.onDeg) counter++;
+        phase_ = Phase::Idle;
+        return TwistEvent::None;
+    }
+
     TwistTuning t_;
-    bool     out_     = false;   // gerade ausgedreht
-    bool     used_    = false;   // diese Ausdrehung schaltet nicht mehr
-    bool     held_    = false;   // Held wurde fuer diese Ausdrehung gemeldet
-    bool     locked_  = false;
-    uint32_t tOut_    = 0;
-    uint32_t tToggle_ = 0;
+    Phase    phase_    = Phase::Idle;
+    bool     used_     = false;   // Pinch dazwischen, diese Ausdrehung schaltet nicht
+    bool     wasHome_  = true;
+    float    peak_     = 0.f;     // groesste Auslenkung dieser Ausdrehung, Grad
+    uint32_t tStart_   = 0;
+    uint32_t tToggle_  = 0;
+    uint32_t tTurning_ = 0;       // zuletzt gedreht
     uint16_t nCancelled_ = 0;
     uint16_t nNotLevel_  = 0;
     uint16_t nTooSlow_   = 0;
