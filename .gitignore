@@ -7,3 +7,6 @@ build/
 # Der PlatformIO-Testrunner (test/test_custom_runner.py) wird von Python
 # importiert und legt daneben Bytecode ab.
 __pycache__/
+
+# Arbeitsnotizen, nicht fuer das oeffentliche Repository
+CODE_CLEANUP.md

@@ -266,6 +266,8 @@ namespace cfg {
     constexpr uint32_t MOVE_INTERVAL_US = 4000;   // us
 #endif
 
+// --- Ausgabe ans HID  [auch in MotionTuning, lib/MotionPipeline/] ----
+
     // Wie viele Berichte hoechstens im selben Takt nachgeschoben werden; ein
     // Bericht traegt hoechstens 127 px je Achse.
     constexpr int MOVE_MAX_REPORTS = 3;        // Pakete je Takt

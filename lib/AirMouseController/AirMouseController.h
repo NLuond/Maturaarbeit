@@ -12,14 +12,14 @@
 #include "OrientationPointer.h"
 #include "AirMouseState.h"
 #include "PoseDetector.h"
-#include "ScrollWheel.h"
+#include "MotionPipeline.h"
 #include "TwistToggle.h"
 #include "Haptic.h"
-#include "LowPass.h"
 #include "ArmOrientation.h"
 #include "TwistGuard.h"
 #include "Battery.h"
 #include "SleepPolicy.h"
+#include "Telemetry.h"
 
 // Verdrahtet Sensorik, Erkenner und Zustandsautomat:
 // Ereignisse einsammeln -> fsm_ fragen -> apply() ausfuehren.
@@ -31,6 +31,7 @@ constexpr TwistTuning  kTwistDefaults{};
 constexpr PoseTuning   kPoseDefaults{};
 constexpr PinchTuning  kPinchDefaults{};
 constexpr ScrollTuning kScrollDefaults{};
+constexpr MotionTuning kMotionDefaults{};
 
 static_assert(kTwistDefaults.onDeg     == cfg::TURN_ON_DEG      &&
               kTwistDefaults.backDeg   == cfg::TWIST_BACK_DEG   &&
@@ -80,6 +81,10 @@ static_assert(kScrollDefaults.pxPerStep  == cfg::SCROLL_PX_PER_STEP  &&
               kScrollDefaults.intervalMs == cfg::SCROLL_INTERVAL_MS,
               "ScrollTuning und die cfg::-Werte des Scrollens sind auseinandergelaufen");
 
+static_assert(kMotionDefaults.maxReports == cfg::MOVE_MAX_REPORTS &&
+              kMotionDefaults.backlogMax == cfg::MOVE_BACKLOG_MAX,
+              "MotionTuning und die cfg::-Werte der Bewegungsausgabe sind auseinandergelaufen");
+
 static_assert(kPinchDefaults.envOff < kPinchDefaults.envOn,
               "Bi-Level-Schwelle verkehrt herum: ENV_OFF muss unter ENV_ON liegen");
 
@@ -112,7 +117,7 @@ public:
         battery_.update(now_ms);
 
         const float env = envelope_.update(s.accMag, dt);
-        trackEnvPeak(env);
+        telemetry_.update(s, env, dt);
         updateAngles(s, dt);
         // scrolling() stammt aus dem Vortakt (onPose() laeuft erst danach); bei
         // 209 Hz ist der eine Takt Verzug ohne Belang.
@@ -129,7 +134,7 @@ public:
         runMotion(s, dt, now_us, now_ms);
 
         handleLink(now_ms);
-        debug(s, env, now_us);
+        telemetry_.emit(s, env, now_us, twist_, elev_, twistGain_);
         handleSleep(s.gyroSum, now_ms);
     }
 
@@ -164,20 +169,18 @@ private:
     OrientationPointer pointer_;
     AirMouseState      fsm_;
     PoseDetector       pose_;
-    ScrollWheel        wheel_;
+    MotionPipeline     motion_;
     TwistToggle        twistToggle_;
     Haptic             haptic_;
     TwistGuard         twistGuard_;
     Battery            battery_;
     SleepPolicy        sleep_;
 
-    bool     clickPulse_ = false;
+    Telemetry          telemetry_{fsm_, pose_, twistToggle_, twistGuard_, pinch_,
+                                  ml_, motion_, pointer_, battery_, mouse_};
+
     float    twist_ = 0.f, elev_ = 0.f;
     float    twistGain_ = 1.f;
-    float    accumX_ = 0.f, accumY_ = 0.f;
-    uint32_t tMove_ = 0, tDbg_ = 0;
-    uint16_t nMoveFail_ = 0;
-    uint16_t nClick_ = 0;
     bool     imuRateActive_ = false;   // Startzustand ausgeschaltet, also BEREIT
 
     // --- Lage -----------------------------------------------------------
@@ -190,7 +193,6 @@ private:
         // Auch wenn gerade nicht gezeigt wird: die Bremse leitet ihre Rate aus
         // der Differenz zum Vortakt ab, ein ausgelassener Takt waere ein Sprung.
         twistGain_ = twistGuard_.update(twist_, dt);
-        updateGravityEstimate(s, dt);
     }
 
     // --- Ereignisse -----------------------------------------------------
@@ -235,7 +237,7 @@ private:
 
     // Die einzige Stelle, an der Aktionen des Automaten Wirkung entfalten.
     void apply(const Actions& a, uint32_t now_ms) {
-        if (a.click) { mouse_.click(); clickPulse_ = true; nClick_++; }
+        if (a.click) { mouse_.click(); telemetry_.onClick(); }
         if (a.rightClick) {
             mouse_.rightClick();
             // Ohne die Sperre schliesst der Loese-Impuls des Fingers das eben
@@ -245,12 +247,11 @@ private:
             // die Rueckkehr aus dem Rechtsklick und darf nicht abschalten. Ein
             // Pinch knapp unter TWIST_CANCEL_ENV meldet sich sonst nirgends.
             twistToggle_.reportShock(now_ms);
-            clickPulse_ = true;
-            nClick_++;
+            telemetry_.onClick();
         }
 
         if (a.resetPose)     pose_.reset();
-        if (a.resetPointer) { accumX_ = accumY_ = 0.f; pointer_.reset(); twistGuard_.reset(); }
+        if (a.resetPointer) { motion_.reset(); pointer_.reset(); twistGuard_.reset(); }
         if (a.hapticPulses) {
             const uint32_t ms = a.hapticLong ? cfg::HAPTIC_LONG_MS : cfg::HAPTIC_MS;
             haptic_.trigger(now_ms, a.hapticPulses, ms);
@@ -268,7 +269,7 @@ private:
     // unterscheiden sich nur im Ziel - deshalb ist nur eine Bewegungsart zu
     // lernen.
     void runMotion(const ImuSample& s, float dt, uint32_t now_us, uint32_t now_ms) {
-        if (!fsm_.on())              { accumX_ = accumY_ = 0.f; return; }
+        if (!fsm_.on())              { motion_.reset(); return; }
         if (pinch_.inFreeze(now_ms)) return;
 
         float px, py;
@@ -279,23 +280,15 @@ private:
         px *= twistGain_;
         py *= twistGain_;
 
-        if (fsm_.scrolling()) {
-            const int8_t ticks = wheel_.update(py, now_ms);
-            if (ticks) mouse_.scroll(ticks);
-            return;
-        }
-        // Kein Rest darf stehenbleiben, der beim naechsten Abdrehen sofort einen
-        // Schritt ausloest.
-        wheel_.reset();
+        motion_.run(motionTarget(), px, py, now_us, now_ms, moveIntervalUs(),
+                    [this](int8_t dx, int8_t dy) { return mouse_.move(dx, dy); },
+                    [this](int8_t ticks)         { mouse_.scroll(ticks); });
+    }
 
-        if (!fsm_.pointing()) { accumX_ = accumY_ = 0.f; return; }
-
-        accumX_ += px;
-        accumY_ += py;
-
-        if (now_us - tMove_ < moveIntervalUs()) return;
-        tMove_ = now_us;
-        sendAccumulatedMove();
+    MotionTarget motionTarget() const {
+        if (fsm_.scrolling()) return MotionTarget::Wheel;
+        if (fsm_.pointing())  return MotionTarget::Cursor;
+        return MotionTarget::None;
     }
 
     // Schneller als ein Bericht je Verbindungsintervall kommt ueber BLE nichts
@@ -304,29 +297,6 @@ private:
     uint32_t moveIntervalUs() const {
         const uint32_t ci = mouse_.connIntervalUs();
         return ci > cfg::MOVE_INTERVAL_US ? ci : cfg::MOVE_INTERVAL_US;
-    }
-
-    // Ein Bericht traegt hoechstens 127 px je Achse; bei schneller Bewegung
-    // laeuft mehr auf, deshalb mehrere Berichte im selben Takt.
-    void sendAccumulatedMove() {
-        for (int i = 0; i < cfg::MOVE_MAX_REPORTS; i++) {
-            const int8_t mx = (int8_t)constrain(accumX_, -127.f, 127.f);
-            const int8_t my = (int8_t)constrain(accumY_, -127.f, 127.f);
-            if (!mx && !my) break;
-
-            // Erst abziehen, wenn das Paket angenommen wurde - sonst geht
-            // Bewegung bei voller Warteschlange verloren.
-            if (mouse_.move(mx, my)) { accumX_ -= mx; accumY_ -= my; }
-            else {
-                // Nimmt die Gegenstelle laenger nichts an, liefe der Rueckstau
-                // minutenlang weiter und der Cursor schoesse beim Verbinden quer
-                // ueber den Schirm.
-                nMoveFail_++;
-                accumX_ = constrain(accumX_, -cfg::MOVE_BACKLOG_MAX, cfg::MOVE_BACKLOG_MAX);
-                accumY_ = constrain(accumY_, -cfg::MOVE_BACKLOG_MAX, cfg::MOVE_BACKLOG_MAX);
-                break;
-            }
-        }
     }
 
     // --- Betriebszustaende ----------------------------------------------
@@ -361,155 +331,5 @@ private:
         mouse_.radioOff();
         imu_.setRate(ImuRate::Sleep);
         imu_.enableWakeOnMotion();
-    }
-
-    // --- Teleplot -------------------------------------------------------
-
-#if DEBUG_TELEPLOT
-    LowPass lpX_{cfg::GRAVITY_LP_HZ}, lpY_{cfg::GRAVITY_LP_HZ}, lpZ_{cfg::GRAVITY_LP_HZ};
-    float   gvx_ = 0.f, gvy_ = 0.f, gvz_ = 1.f;
-
-    // Groesster env-Wert seit der letzten Ausgabe. Die Schleife laeuft mit
-    // 209 Hz, die Ausgabe mit 50 Hz - ein Impuls (Zeitkonstante rund 10 ms)
-    // waere sonst nur zufaellig auf seinem Scheitel getroffen.
-    float   envPeak_ = 0.f;
-    void trackEnvPeak(float env) { if (env > envPeak_) envPeak_ = env; }
-
-    // Muss in jedem Takt laufen, nicht erst im gedrosselten debug(): ein
-    // Tiefpass, der nur jedes n-te Sample sieht, hat eine andere Zeitkonstante.
-    void updateGravityEstimate(const ImuSample& s, float dt) {
-        gvx_ = lpX_.run(s.ax, dt);
-        gvy_ = lpY_.run(s.ay, dt);
-        gvz_ = lpZ_.run(s.az, dt);
-    }
-
-    // Winkel einer Achse ueber der Waagerechten.
-    static float axisTiltDeg(float comp, float mag) {
-        if (mag < 1e-3f) return 0.f;
-        return asinf(constrain(comp / mag, -1.f, 1.f)) * 57.29578f;
-    }
-#else
-    void updateGravityEstimate(const ImuSample&, float) {}
-    void trackEnvPeak(float) {}
-#endif
-
-    // Eine Zeile ">name:wert" pro Kanal.
-    void debug(const ImuSample& s, float env, uint32_t now_us) {
-    #if DEBUG_TELEPLOT
-        if (now_us - tDbg_ < cfg::DEBUG_INTERVAL_US) return;
-        tDbg_ = now_us;
-
-        // pose ist die Haltung im Automaten, dpose die des Detektors - laufen
-        // sie auseinander, liegt der Fehler in der Uebergabe.
-        // pose: 0 = Point, 1 = Idle, 2 = Turned.
-        // tw:   0 = gerade, 1 = ausgedreht, 2 = verbraucht, 3 = Lockout.
-        Serial.print(">on:");     Serial.println(fsm_.on() ? 1 : 0);
-        Serial.print(">pose:");   Serial.println((int)fsm_.pose());
-        Serial.print(">dpose:");  Serial.println((int)pose_.pose());
-        Serial.print(">tw:");     Serial.println(twistToggle_.state());
-        Serial.print(">nClick:"); Serial.println(nClick_);
-
-        // Warum eine Ausdrehung nicht geschaltet hat: Erschuetterung ueber
-        // TWIST_CANCEL_ENV, Arm ausserhalb LEVEL_MAX_DEG, zu spaet zurueck. Alle
-        // drei scheitern sonst lautlos und sehen wie Unzuverlaessigkeit aus.
-        Serial.print(">nTwCan:");  Serial.println(twistToggle_.rejectedByCancel());
-        Serial.print(">nTwLvl:");  Serial.println(twistToggle_.rejectedByLevel());
-        Serial.print(">nTwSlow:"); Serial.println(twistToggle_.rejectedByTime());
-        // Verworfene Klicks, weil sich der Unterarm dabei drehte - das ist die
-        // Ein/Aus-Geste, die sich frueher als Rechtsklick austobte.
-        Serial.print(">nTwist:");  Serial.println(pinch_.blockedByTwist());
-        Serial.print(">vbat:");   Serial.println(battery_.volts(), 3);
-
-        // ble: 1 = verbunden, 0 = wirbt. blerr sagt WARUM nichts geht, bitweise:
-        // 1 = Bluefruit.begin(), 2 = Device Information, 4 = HID, 8 = Advertising.
-        // nconn trennt "wirbt nicht" von "ist verbunden" - beides setzt in der
-        // Bibliothek dasselbe Flag zurueck. ci ist die eigentliche Taktgrenze.
-        Serial.print(">ble:");    Serial.println(mouse_.connected() ? 1 : 0);
-        Serial.print(">adv:");    Serial.println(mouse_.advertising() ? 1 : 0);
-        Serial.print(">blerr:");  Serial.println(mouse_.initError());
-        Serial.print(">nconn:");  Serial.println(mouse_.connCount());
-        Serial.print(">nadv:");   Serial.println(mouse_.advRestarts());
-        Serial.print(">ci:");     Serial.println(mouse_.connIntervalUs() / 1000.f, 2);
-
-    #if DEBUG_SET == DEBUG_ALL || DEBUG_SET == DEBUG_PINCH
-        // Klick-Kette: env -> gate -> arm -> p_ml -> click. Steigt stattdessen
-        // nDeb oder nGyro, wurde die Flanke erkannt und erst danach verworfen.
-        // arm laeuft absichtlich laenger als gate: das ML-Fenster braucht Zeit,
-        // den Impuls aufzunehmen. click latcht bis zur naechsten Ausgabe -
-        // zwei Klicks darin trennt nur nClick.
-        Serial.print(">env:");    Serial.println(env, 4);
-        Serial.print(">gate:");   Serial.println(pinch_.envGate() ? 1 : 0);
-        Serial.print(">arm:");    Serial.println(pinch_.armed() ? 1 : 0);
-        Serial.print(">p_ml:");   Serial.println(ml_.score(), 3);
-        Serial.print(">click:");  Serial.println(clickPulse_ ? 1 : 0);
-        Serial.print(">envMax:"); Serial.println(envPeak_, 4);
-        Serial.print(">gsum:");   Serial.println(s.gyroSum, 1);
-        Serial.print(">nDeb:");   Serial.println(pinch_.blockedByDebounce());
-        Serial.print(">nGyro:");  Serial.println(pinch_.blockedByGyro());
-        Serial.print(">ei_err:"); Serial.println(ml_.error());
-        Serial.print(">ei_us:");  Serial.println(ml_.lastUs());
-    #endif
-
-    #if DEBUG_SET == DEBUG_ALL || DEBUG_SET == DEBUG_POINT
-        // Zeigen: rx/ry gegen gx/gz zeigt die Daempfung des Filters, accx den
-        // Rueckstau, mvfail abgelehnte Pakete. rtwist ist geglaettet (Haltung),
-        // rtwraw roh (Geste) - ihre Differenz am Scheitel ist die Verzoegerung
-        // des Tiefpasses.
-        Serial.print(">gx:");     Serial.println(s.gx, 2);
-        Serial.print(">gy:");     Serial.println(s.gy, 2);
-        Serial.print(">gz:");     Serial.println(s.gz, 2);
-        Serial.print(">rx:");     Serial.println(pointer_.rateX(), 2);
-        Serial.print(">ry:");     Serial.println(pointer_.rateY(), 2);
-        Serial.print(">pacc:");   Serial.println(pointer_.accel(), 2);
-        Serial.print(">accx:");   Serial.println(accumX_, 1);
-        Serial.print(">mvfail:"); Serial.println(nMoveFail_);
-        Serial.print(">twist:");  Serial.println(twist_, 1);
-        Serial.print(">elev:");   Serial.println(elev_, 1);
-        Serial.print(">rtwist:"); Serial.println(pose_.relTwistDeg(), 1);
-        Serial.print(">rtwraw:"); Serial.println(arm::relDeg(twist_, cfg::TWIST_NEUTRAL_DEG), 1);
-        Serial.print(">level:");  Serial.println(pose_.level() ? 1 : 0);
-        Serial.print(">pgate:");  Serial.println(pose_.poseGate() ? 1 : 0);
-        Serial.print(">sacc:");   Serial.println(wheel_.pending(), 2);
-        Serial.print(">tg:");     Serial.println(twistGain_, 2);
-        Serial.print(">tgr:");    Serial.println(twistGuard_.rateDps(), 1);
-    #endif
-
-    #if DEBUG_SET == DEBUG_ENV
-        Serial.print(">env:");    Serial.println(env, 4);
-        Serial.print(">envMax:"); Serial.println(envPeak_, 4);
-        Serial.print(">gate:");   Serial.println(pinch_.envGate() ? 1 : 0);
-        Serial.print(">click:");  Serial.println(clickPulse_ ? 1 : 0);
-    #endif
-
-    #if DEBUG_SET == DEBUG_ORIENT
-        // Einbaulage nachpruefen: flach az = +1, um 90 Grad verdreht ax = +1.
-        // twist/elev muessen sich mit angX/angZ bzw. angY decken.
-        const float amag = sqrtf(gvx_*gvx_ + gvy_*gvy_ + gvz_*gvz_);
-        Serial.print(">ax:");     Serial.println(s.ax, 3);
-        Serial.print(">ay:");     Serial.println(s.ay, 3);
-        Serial.print(">az:");     Serial.println(s.az, 3);
-        Serial.print(">amraw:");  Serial.println(s.accMag, 3);
-        Serial.print(">gvx:");    Serial.println(gvx_, 3);
-        Serial.print(">gvy:");    Serial.println(gvy_, 3);
-        Serial.print(">gvz:");    Serial.println(gvz_, 3);
-        Serial.print(">amag:");   Serial.println(amag, 3);
-        Serial.print(">angX:");   Serial.println(axisTiltDeg(gvx_, amag), 1);
-        Serial.print(">angY:");   Serial.println(axisTiltDeg(gvy_, amag), 1);
-        Serial.print(">angZ:");   Serial.println(axisTiltDeg(gvz_, amag), 1);
-        Serial.print(">gx:");     Serial.println(s.gx, 1);
-        Serial.print(">gy:");     Serial.println(s.gy, 1);
-        Serial.print(">gz:");     Serial.println(s.gz, 1);
-        Serial.print(">twist:");  Serial.println(twist_, 1);
-        Serial.print(">elev:");   Serial.println(elev_, 1);
-        Serial.print(">rtwist:"); Serial.println(pose_.relTwistDeg(), 1);
-        Serial.print(">level:");  Serial.println(pose_.level() ? 1 : 0);
-        Serial.print(">pgate:");  Serial.println(pose_.poseGate() ? 1 : 0);
-    #endif
-
-        clickPulse_ = false;
-        envPeak_    = 0.f;   // erst NACH allen Gruppen, sie lesen ihn alle
-    #else
-        (void)s; (void)env; (void)now_us;
-    #endif
     }
 };
