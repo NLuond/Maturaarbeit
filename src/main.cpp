@@ -86,8 +86,8 @@ void loop() {
     const uint32_t now_us = micros();
 
 #if DEBUG_TELEPLOT && !COLLECT_MODE
-    // Verspaetung dieses Takts, gemessen BEVOR nextSample_us weitergestellt
-    // wird. ovr schlaegt erst bei einem ganzen verpassten Takt aus.
+    // Verspaetung dieses Takts, gemessen vor dem Weiterstellen von
+    // nextSample_us. ovr schlaegt erst bei einem ganzen verpassten Takt aus.
     const int32_t lateUs = (int32_t)(now_us - nextSample_us);
 #endif
 

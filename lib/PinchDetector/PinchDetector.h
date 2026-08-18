@@ -4,12 +4,11 @@
 // Entscheidet, wann eine Erschuetterung als Klick gilt.
 //
 // Der Klassifikator kommt als Callable in tick() herein und wird nur waehrend
-// eines ARMIERUNGSFENSTERS befragt: die steigende Flanke der Huellkurve
+// eines Armierungsfensters befragt: die steigende Flanke der Huellkurve
 // armiert, danach wird armMs lang weitergefragt. Am Gate selbst zu
-// klassifizieren waere ein Wettlauf - es oeffnet am ANFANG des Impulses, und da
-// enthaelt das ML-Fenster fast nur die Zeit davor. So bleibt ausserdem das
-// Edge-Impulse-SDK aus dieser Datei heraus, und die Inferenz laeuft nicht in
-// jedem Takt.
+// klassifizieren waere ein Wettlauf - es oeffnet am Anfang des Impulses, wo das
+// ML-Fenster noch fast nur die Zeit davor enthaelt. Als Callable bleibt zudem
+// das Edge-Impulse-SDK aus dieser Datei heraus.
 //
 // Ohne config.h, damit der PC-Test laeuft; die Werte stehen in PinchTuning und
 // sind per static_assert an cfg:: gebunden.
@@ -51,11 +50,11 @@ public:
 
     // twistDps: Drehrate um die Unterarmachse (TwistGuard::rateDps()).
     //
-    // relaxed: im Scroll-Modus zaehlt fast allein die Huellkurve - weder
-    // Klassifikator noch Gyro-Guard werden gefragt. Der Rechtsklick faellt dort
-    // per Definition in eine Armbewegung, und der Guard verwuerfe ihn genau
-    // dann, wenn er gebraucht wird. Der Dreh-Guard bleibt als einziger stehen:
-    // gescrollt wird durch Neigen und Schwenken, nicht durch Verdrehen.
+    // relaxed: im Scroll-Modus zaehlt fast allein die Huellkurve. Der
+    // Rechtsklick faellt dort per Definition in eine Armbewegung, und der
+    // Gyro-Guard verwuerfe ihn genau dann, wenn er gebraucht wird. Der
+    // Dreh-Guard bleibt als einziger stehen: gescrollt wird durch Neigen und
+    // Schwenken, nicht durch Verdrehen.
     template <class MlGate>
     bool tick(float env, float gyroSum, float twistDps, uint32_t now_ms, MlGate&& ml,
               bool relaxed = false) {
@@ -74,9 +73,9 @@ public:
             armed_   = true;
             nSkip_   = t_.mlStride; // im naechsten Schritt sofort klassifizieren
 
-            // Eine NEUE Erschuetterung setzt das Urteil zurueck: das Modell muss
-            // sie eigens bestaetigen, und die Flanke darf wieder zaehlen. Gegen
-            // ein Flattern der Huellkurve schuetzt die Entprellung.
+            // Eine neue Erschuetterung setzt das Urteil zurueck: das Modell
+            // muss sie eigens bestaetigen. Gegen ein Flattern der Huellkurve
+            // schuetzt die Entprellung.
             mlHot_  = false;
             wasHot_ = false;
         }
@@ -84,8 +83,8 @@ public:
         if (armed_ && (now_ms - tArm_) >= t_.armMs) { armed_ = false; mlHot_ = false; }
 
         // Nur jeder n-te Takt kostet eine Inferenz; dazwischen gilt das letzte
-        // Ergebnis weiter, damit die Flanke nicht zwischen zwei Takten verloren
-        // geht.
+        // Ergebnis weiter, sonst ginge die Flanke zwischen zwei Takten
+        // verloren.
         if (armed_) {
             if (++nSkip_ >= t_.mlStride) {
                 nSkip_ = 0;

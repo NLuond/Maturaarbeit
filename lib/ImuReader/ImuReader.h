@@ -20,7 +20,7 @@ public:
         imu_.settings.gyroSampleRate  = cfg::GYRO_ODR_HZ;
         imu_.begin();
 
-        // Muss NACH imu_.begin() stehen: dort laeuft Wire.begin() und setzt die
+        // Muss nach imu_.begin() stehen: dort laeuft Wire.begin() und setzt die
         // Taktrate auf die Arduino-Vorgabe zurueck.
         Wire.setClock(cfg::I2C_CLOCK_HZ);
     }

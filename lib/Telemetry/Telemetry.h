@@ -68,7 +68,7 @@ public:
         if (kSet == DEBUG_ORIENT)                     emitOrientation(s, twistDeg, elevDeg);
 
         clicked_ = false;
-        envPeak_ = 0.f;   // erst NACH allen Gruppen, sie lesen ihn alle
+        envPeak_ = 0.f;   // erst nach allen Gruppen, sie lesen ihn alle
     }
 
 private:
@@ -110,7 +110,7 @@ private:
     // sind Klicks, die der Dreh-Guard verworfen hat. Alle vier scheitern sonst
     // lautlos und sehen wie Unzuverlaessigkeit aus.
     //
-    // ble: 1 = verbunden, 0 = wirbt. blerr sagt WARUM nichts geht, bitweise:
+    // ble: 1 = verbunden, 0 = wirbt. blerr sagt, warum nichts geht, bitweise:
     // 1 = Bluefruit.begin(), 2 = Device Information, 4 = HID, 8 = Advertising.
     // nconn trennt "wirbt nicht" von "ist verbunden" - beides setzt in der
     // Bibliothek dasselbe Flag zurueck. ci ist die eigentliche Taktgrenze.

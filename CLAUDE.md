@@ -22,13 +22,13 @@ Der Build ist wegen des Edge-Impulse-SDK langsam und **sehr** gespraechig; Ausga
 (`2>&1 | Select-Object -Last 20`). Interessant ist nur die RAM/Flash-Zeile und `SUCCESS`.
 
 Zustandsautomat, Winkel-Ableitung und die anderen hardwarefreien Module werden auf dem PC
-getestet, nicht auf dem Chip. Alle zehn auf einmal:
+getestet, nicht auf dem Chip. Alle elf auf einmal:
 
 ```powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" test -e native
 ```
 
-Erwartet: `10 test cases: 10 succeeded`. Das laeuft in gut zehn Sekunden und ist der
+Erwartet: `11 test cases: 11 succeeded`. Das laeuft in gut zehn Sekunden und ist der
 schnellste Weg, eine Aenderung an einem dieser Module zu pruefen — vor dem Firmware-Build,
 nicht danach.
 
@@ -52,15 +52,15 @@ der Schnittstelle und darf nicht beilaeufig geaendert werden.
 
 Alles andere wird weiterhin ueber Kompilieren + Messen am Geraet (Teleplot) verifiziert.
 
-Alle zehn Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt — weder
+Alle elf Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt — weder
 `Arduino.h` noch `config.h`: `AirMouseState.h`, `ArmOrientation.h`, `TwistToggle.h`,
 `TwistGuard.h`, `SleepPolicy.h`, `PoseDetector.h`, `PinchDetector.h`, `ScrollWheel.h`,
-`OneEuro.h`, `PinchFeatures.h`/`ImuSample.h` und `MadgwickAHRS.h`. Die `-I`-Liste in
+`MotionPipeline.h`, `OneEuro.h`, `PinchFeatures.h`/`ImuSample.h` und `MadgwickAHRS.h`. Die `-I`-Liste in
 `[env:native]` bricht den Build, wenn eines davon abdriftet — das ist Absicht.
 
 Parameter, die sonst aus `cfg::` kaemen, stecken deshalb in eigenen Tuning-Structs:
 `TwistTuning`, `TwistGuardTuning`, `SleepTuning`, `PoseTuning`, `PinchTuning`,
-`ScrollTuning` und `PointerTuning`. **Ein Block von `static_assert`s am Kopf von
+`ScrollTuning`, `MotionTuning` und `PointerTuning`. **Ein Block von `static_assert`s am Kopf von
 `AirMouseController.h` haelt jedes dieser Felder mit seinem `cfg::`-Gegenstueck zusammen —
 bei jedem neuen Tuning-Feld gehoert er erweitert**, sonst driften zwei Wahrheiten
 lautlos auseinander. In `config.h` sind die betroffenen Gruppen mit `[auch in <X>Tuning]`
@@ -83,7 +83,7 @@ Es gibt keine Laufzeit-Konfiguration. Alle Betriebsarten sind `#define`s ganz ob
 | Schalter | Wirkung |
 |---|---|
 | `COLLECT_MODE` | `main.cpp` sendet statt HID nur CSV (`env,gyro/100,lax,lay,laz`) fuer Edge Impulse. HID/Controller werden gar nicht erst initialisiert. |
-| `DEBUG_TELEPLOT` | Teleplot-Kanaele (`>name:wert`) aus `AirMouseController::debug()`. Kostet Serial-Bandbreite und bremst die Schleife — fuer echte Nutzungstests aus. |
+| `DEBUG_TELEPLOT` | Teleplot-Kanaele (`>name:wert`) aus `Telemetry`. Kostet Serial-Bandbreite und bremst die Schleife — fuer echte Nutzungstests aus. |
 | `USE_ML_PINCH` | ML-Klassifikator gegen reine Schwellwert-Erkennung (`envGate`). |
 | `USE_BLE_HID` | BLE (bluefruit) gegen USB-HID (TinyUSB) in `MouseHID.h`. |
 | `USE_POSE_MODE` | Haltungserkennung aus → `PoseDetector` meldet dauerhaft `Point`, zum Eingrenzen von Cursor-Problemen. |
@@ -145,9 +145,10 @@ per `-I` in `platformio.ini` eingebunden. Neues Modul → Ordner anlegen **und**
 das Modul hardwarefrei ist und einen PC-Test bekommt.
 
 Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `TwistToggle`,
-`TwistGuard`, `PoseDetector`, `ScrollWheel`, `OrientationPointer`, `SleepPolicy`,
-`Filters/`) kennen weder Hardware noch das EI-SDK. Beides ist auf `ImuReader`, `MouseHID`,
-`Haptic`, `Battery` und `PinchClassifier` beschraenkt. Diese Richtung beim Erweitern
+`TwistGuard`, `PoseDetector`, `ScrollWheel`, `MotionPipeline`, `OrientationPointer`,
+`SleepPolicy`, `Filters/`) kennen weder Hardware noch das EI-SDK. Beides ist auf
+`ImuReader`, `MouseHID`, `Haptic`, `Battery`, `PinchClassifier` und `Telemetry`
+beschraenkt. Diese Richtung beim Erweitern
 beibehalten — nichts aus `lib/ei-model` oder `bluefruit` gehoert in ein Policy-Modul.
 
 Streng hardwarefrei (weder `Arduino.h` noch `config.h`) sind davon alle ausser
@@ -293,16 +294,19 @@ Ablauf pro Tick:
    Scroll-Modus zum ungewollten Rechtsklick. Er kostet nichts, weil gescrollt wird,
    indem man den Arm neigt und schwenkt, und nicht, indem man ihn verdreht — die
    beiden Bewegungen liegen auf getrennten Achsen. Zaehler `nTwist`.
-5. `OrientationPointer` und `ScrollWheel` — **eine Quelle, zwei Ziele.** `runMotion()`
-   rechnet die Bewegung genau einmal; sie geht an den Cursor (`Point`) oder ins Rad
-   (`Scroll`, senkrechte Komponente durch `SCROLL_PX_PER_STEP`). Deshalb muss der Nutzer
+5. `OrientationPointer` und `MotionPipeline` — **eine Quelle, zwei Ziele.** Der Zeiger
+   rechnet die Bewegung genau einmal in Pixel; `MotionPipeline` bringt sie ans Ziel, das
+   `MotionTarget` benennt: an den Cursor (`Point`) oder ueber `ScrollWheel` ins Rad
+   (`Turned`, senkrechte Komponente durch `SCROLL_PX_PER_STEP`). Deshalb muss der Nutzer
    nur eine Bewegungsart lernen. Der Vorgaenger war ein Joystick auf der *gehaltenen*
    Armneigung mit Eintrittswinkel, Totzone und einer Sekunde Haltezeit — eine zweite
    Bewegungsart mit eigenem Verhalten.
    `arm::rates()` zerlegt die Drehrate in Gieren und Nicken
    *bezogen auf den Raum* (Roll-Kompensation, `USE_ROLL_COMP`) → Deadzone → 1-Euro-Filter
-   → Beschleunigung → Pixel; im Controller akkumuliert und alle `MOVE_INTERVAL_US` als
-   int8 verschickt. Ohne die Kompensation laeuft der Cursor bei verdrehter Hand schraeg;
+   → Beschleunigung → Pixel; `MotionPipeline` akkumuliert sie und schickt alle
+   `MOVE_INTERVAL_US` int8-Berichte los. Den Sendeweg bekommt sie als Callable
+   uebergeben — wie `PinchDetector` den Klassifikator —, deshalb kennt sie das HID nicht
+   und laeuft im PC-Test. Ohne die Kompensation laeuft der Cursor bei verdrehter Hand schraeg;
    bei `twist = 0` sind beide Pfade identisch. `TwistGuard` blendet die Bewegung
    waehrend einer Unterarmdrehung aus, damit die Drehgeste sich zielen laesst, ohne dass
    der Cursor dabei querlaeuft. Seine Rate kommt aus der Lageschaetzung
@@ -310,7 +314,12 @@ Ablauf pro Tick:
    faellt nicht exakt mit einer Platinenachse zusammen, eine Verdrehung leckt deshalb
    auch in `gx` und `gz` und ein einzelner Gyro-Kanal wuerde sie nicht vollstaendig
    erfassen.
-6. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
+6. `Telemetry` — die Teleplot-Ausgabe haelt const-Referenzen auf alle Module und liest
+   sie von aussen; im Controller steht dafuer nur noch `telemetry_.update()` und
+   `telemetry_.emit()`. Statt `#if` im Rumpf entscheiden die Compile-Konstanten
+   `kEnabled` (aus `DEBUG_TELEPLOT`) und `kSet` (aus `DEBUG_SET`) — der Optimierer wirft
+   die abgeschalteten Zweige samt Serial-Aufrufen weg, gemessen rund 2.7 kB Flash.
+7. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
    `GoToSleep`, bereitet das **private** `prepareSleep()` nur Funk und IMU vor
    (`radioOff()`, IMU auf Sleep-Rate + Wake-on-Motion); das eigentliche Schlafenlegen
    (`suspendLoop()`) und Aufwecken fuehrt `main.cpp` aus, weil dort der Schleifentakt

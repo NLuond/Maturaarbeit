@@ -4,6 +4,8 @@
 #include "LowPass.h"
 #include "config.h"
 
+// Huellkurve der Erschuetterung, Grundlage der Klickerkennung:
+// Hochpass (entfernt Erdbeschleunigung und Handbewegung) -> Betrag -> Tiefpass.
 class VibrationEnvelope {
 public:
     VibrationEnvelope() : hp(cfg::HP_CUTOFF_HZ), lp(cfg::ENV_LP_HZ) {}

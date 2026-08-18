@@ -7,7 +7,7 @@
 //  Konfiguration der Air Mouse
 // =====================================================================
 //
-// Zwei Teile: #define-Schalter fuer die Betriebsarten (es gibt KEINE
+// Zwei Teile: #define-Schalter fuer die Betriebsarten (es gibt keine
 // Laufzeit-Konfiguration - umstellen heisst neu bauen und flashen) und
 // constexpr-Einstellwerte in namespace cfg, gruppiert in der Reihenfolge, in
 // der ein Messwert sie durchlaeuft.
@@ -37,7 +37,7 @@
 // ist. Kostet Ruhestrom; fuer die Strommessungen auf false.
 #define BLE_ALWAYS_ON   true
 
-// KURZ halten: das Advertising-Paket hat 31 Bytes, wovon Flags, Appearance und
+// Kurz halten: das Advertising-Paket hat 31 Bytes, wovon Flags, Appearance und
 // die HID-UUID schon 11 belegen.
 #define BLE_NAME        "Maturaarbeit"
 
@@ -61,7 +61,7 @@
 // =====================================================================
 
 // Teleplot-Kanaele (">name:wert"). Kostet Serial-Bandbreite und bremst die
-// Schleife - fuer Nutzungstests und JEDE Strommessung ausschalten.
+// Schleife - fuer Nutzungstests und jede Strommessung ausschalten.
 #define DEBUG_TELEPLOT  true
 
 // Welche Kanalgruppe gesendet wird. Alle gleichzeitig sind rund 17 kB/s, und
@@ -160,19 +160,18 @@ namespace cfg {
     // Einschaltgeste ist die Lageschaetzung am staerksten gestoert.
     constexpr float TWIST_NEUTRAL_DEG = 0.f;   // Grad
 
-    // Eine Schwelle mit Hysterese, verglichen wird der BETRAG: aus der
+    // Eine Schwelle mit Hysterese, verglichen wird der Betrag: aus der
     // Zeige-Haltung ist TURN_ON_DEG anatomisch nur in einer Richtung erreichbar.
     constexpr float TURN_ON_DEG  = 70.f;       // Grad
     constexpr float TURN_OFF_DEG = 55.f;       // Grad
 
-    // Waagrecht-Bedingung der EIN/AUS-GESTE, absolut gegen die Schwerkraft. Bei
-    // 50 Grad stehen noch 64 Prozent der Schwerkraft quer zur Armachse, die
-    // Verdrehung bleibt also beobachtbar. Zaehler nTwLvl zeigt, wie oft das Gate
-    // zuschlaegt.
+    // Waagrecht-Bedingung der Ein/Aus-Geste, absolut gegen die Schwerkraft; bei
+    // 50 Grad stehen noch 64 Prozent der Schwerkraft quer zur Armachse und die
+    // Verdrehung bleibt beobachtbar. Zaehler nTwLvl.
     constexpr float LEVEL_MAX_DEG  = 50.f;     // Grad
     constexpr float LEVEL_HYST_DEG =  8.f;     // Grad
 
-    // Neigungs-Gate der HALTUNG, weiter und asymmetrisch: nach oben zeigt und
+    // Neigungs-Gate der Haltung, weiter und asymmetrisch: nach oben zeigt und
     // scrollt man, nach unten haengt der Arm im Ruhezustand.
     constexpr float POSE_UP_MAX_DEG   = 65.f;  // Grad
     constexpr float POSE_DOWN_MAX_DEG = 35.f;  // Grad
@@ -208,16 +207,15 @@ namespace cfg {
     // und nicht schon am Rand der abgedrehten Haltung gilt.
     constexpr float TWIST_BACK_DEG = 30.f;     // Grad
 
-    // Fenster fuer die GANZE Bewegung, gemessen ab dem Verlassen der
+    // Fenster fuer die ganze Bewegung, gemessen ab dem Verlassen der
     // Neutralzone: rund 1.2 s reine Drehzeit raus und zurueck plus die Rampe
     // von TWIST_BACK_DEG bis TURN_ON_DEG.
     constexpr uint32_t TWIST_MAX_MS     = 1400;   // ms
     constexpr uint32_t TWIST_LOCKOUT_MS =  800;   // ms Ruhe nach dem Schalten
 
     // Ab wann eine Erschuetterung als Pinch zaehlt und die Ausdrehung
-    // verbraucht: nur ein RUHENDER Unterarm kann gepincht haben. Die Drehung
-    // selbst erschuettert das Board am Scheitel, und das verwarf frueher die
-    // eigene Geste.
+    // verbraucht: nur ein ruhender Unterarm kann gepincht haben - die Drehung
+    // erschuettert das Board am Scheitel selbst.
     constexpr float    TWIST_STILL_DPS = 40.f;   // Grad/s
     constexpr uint32_t TWIST_STILL_MS  = 150;    // ms Ruhe davor
 
@@ -230,7 +228,7 @@ namespace cfg {
     constexpr float SENS_X    = 110.0f;        // px/Grad
     constexpr float SENS_Y    = 110.0f;        // px/Grad
 
-    // Beschleunigung AUS: sie greift nach dem 1-Euro-Filter und multipliziert
+    // Beschleunigung aus: sie greift nach dem 1-Euro-Filter und multipliziert
     // deshalb auch das Restzittern. Die Konstante bleibt fuer die Gegenprobe
     // ohne Reflash (PointerTuning t; t.accelK = 2.f;).
     constexpr float ACCEL_K   = 0.0f;          // Faktor pro 200 Grad/s
@@ -292,7 +290,7 @@ namespace cfg {
     constexpr float ENV_ON  = 0.035f;          // g (Huellkurve)
     constexpr float ENV_OFF = 0.020f;          // g (Huellkurve)
 
-    // Eigene, HOEHERE Schwelle fuer die Meldung an die Drehgeste: eine zuegige
+    // Eigene, hoehere Schwelle fuer die Meldung an die Drehgeste: eine zuegige
     // 90-Grad-Drehung hebt die Huellkurve selbst ueber ENV_ON. Ob die Meldung
     // die Ausdrehung verwirft, entscheidet TwistToggle an der Drehrate.
     constexpr float TWIST_CANCEL_ENV = 0.050f; // g (Huellkurve)
@@ -304,15 +302,13 @@ namespace cfg {
     // Nur jeder n-te Takt kostet eine Inferenz (rund 3 ms von 4785 us Budget).
     constexpr uint8_t  PINCH_ML_STRIDE = 2;
 
-    // Erschuetterungen mitten in einer heftigen Bewegung sind kein Pinch. OFFEN:
-    // bei jedem Pinch schiesst gyroSum auf 200 bis 250 - am Geraet pruefen, ob
-    // die Spitze zum env-Maximum abgeklungen ist.
+    // Erschuetterungen mitten in einer heftigen Bewegung sind kein Pinch.
     constexpr float    PINCH_GYRO_GUARD = 100.f;   // Grad/s
 
     // Zweiter Guard, allein auf der Verdrehung des Unterarms - der einzige, den
-    // der Scroll-Modus NICHT aussetzt: die Ein/Aus-Geste dreht um genau diese
-    // Achse und erschuetterte sonst einen Rechtsklick herbei. Gescrollt wird
-    // durch Neigen und Schwenken, der Rechtsklick verliert also nichts.
+    // der Scroll-Modus nicht aussetzt: die Ein/Aus-Geste dreht um genau diese
+    // Achse. Gescrollt wird durch Neigen und Schwenken, der Rechtsklick
+    // verliert also nichts.
     constexpr float    PINCH_TWIST_GUARD = 60.f;   // Grad/s
 
     // Kuerzester Abstand zweier gewerteter Pinches; sperrt den Loese-Impuls aus,
@@ -331,10 +327,9 @@ namespace cfg {
     // solange das env-Gate offen ist.
     constexpr uint32_t FREEZE_MAX_MS = 60;     // ms
 
-    // Mindestwahrscheinlichkeit der Klasse "pinch". 0.50 statt 0.65, weil die
-    // Validierung von Modell 1084395 (AUC 0.94, 0.1 Prozent Falsch-Positive)
-    // Spielraum auf der Seite der Empfindlichkeit zeigt. OFFEN: Kontrolle ist
-    // nClick nach einer Stunde Arbeit ohne bewusstes Pinchen.
+    // Mindestwahrscheinlichkeit der Klasse "pinch"; 0.50 statt 0.65, weil die
+    // Validierung von Modell 1084395 (AUC 0.94) Spielraum auf der Seite der
+    // Empfindlichkeit zeigt.
     constexpr float    ML_CONFIDENCE = 0.50f;  // 0..1
 
 // =====================================================================
@@ -358,8 +353,8 @@ namespace cfg {
 // 10. Haptische Rueckmeldung
 // =====================================================================
 //
-// Rein digital geschaltet, ohne PWM: die Information steckt in der ANZAHL der
-// Impulse und in ihrer DAUER.
+// Rein digital geschaltet, ohne PWM: die Information steckt in der Anzahl der
+// Impulse und in ihrer Dauer.
 //
 //   1 kurz  Linksklick, Haltungswechsel
 //   2 kurz  Rechtsklick - er passiert in einer Haltung ohne sichtbaren Cursor
@@ -369,11 +364,11 @@ namespace cfg {
     constexpr uint32_t HAPTIC_MS      = 40;    // ms Impulsdauer
     constexpr uint32_t HAPTIC_LONG_MS = 200;   // ms, Ein/Aus
 
-    // Luecke zwischen zwei Impulsen DESSELBEN Musters: zwei Buzz muessen als
+    // Luecke zwischen zwei Impulsen desselben Musters: zwei Buzz muessen als
     // getrennt spuerbar bleiben.
     constexpr uint32_t HAPTIC_GAP_MS  = 50;    // ms
 
-    // Ruhezeit NACH einem Muster. Das Zwei-Impuls-Muster dauert 130 ms; mit
+    // Ruhezeit nach einem Muster. Das Zwei-Impuls-Muster dauert 130 ms; mit
     // 30 ms Reserve bleibt der zweite Buzz eines schnellen Doppel-Rechtsklicks
     // auch bei drei Takten Jitter (~14 ms) unter DEBOUNCE_MS hoerbar.
     constexpr uint32_t HAPTIC_REST_MS = 30;    // ms

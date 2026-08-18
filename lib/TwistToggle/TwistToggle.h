@@ -2,36 +2,25 @@
 #include <stdint.h>
 #include <math.h>
 
-// Ein/Aus durch eine Drehgeste des Unterarms. Die Ausdrehung hat genau EINE
-// Bedeutung:
+// Ein/Aus durch eine Drehgeste des Unterarms: raus und zurueck, die ganze
+// Bewegung binnen maxMs. Das ist die einzige Bedeutung der Ausdrehung - wer
+// laenger draussen bleibt, ist in der Haltung Turned, und die traegt
+// PoseDetector.
 //
-//   raus und zurueck, die ganze Bewegung binnen maxMs  -> Toggle (Ein/Aus)
-//   Erschuetterung, waehrend der Unterarm dabei ruhte  -> nichts, das war ein Pinch
-//   alles andere                                       -> nichts
-//
-// Wer laenger draussen bleibt, ist einfach in der Haltung Turned - die traegt
-// PoseDetector, nicht dieses Modul.
-//
-// Zwei Groessen kommen herein, beide aus derselben Lageschaetzung. Der WINKEL
-// ist absolut und driftet nicht weg; aus der Drehrate integriert wuerde die
-// Referenz wandern. Die RATE sagt, ob sich der Unterarm gerade ueberhaupt
-// dreht, und trennt damit die Erschuetterung der Geste selbst - der Anschlag
-// am Scheitel - von der eines Pinch. Ohne diese Trennung verwarf der Anschlag
-// die eigene Geste, und weil der Controller nur im eingeschalteten Zustand
-// meldet, ging die Maus an, aber nicht wieder aus.
-//
-// Kehrseite des absoluten Winkels: bei senkrecht gehaltenem Unterarm ist die
-// Verdrehung aus der Schwerkraft nicht beobachtbar, deshalb muss level
-// durchgehend gelten.
+// Zwei Groessen kommen herein, beide aus derselben Lageschaetzung. Der Winkel
+// ist absolut und driftet nicht weg; aus der Drehrate integriert wanderte die
+// Referenz. Die Rate trennt die Erschuetterung der Geste selbst - den Anschlag
+// am Scheitel - von der eines Pinch. Kehrseite des absoluten Winkels: bei
+// senkrechtem Unterarm ist die Verdrehung aus der Schwerkraft nicht
+// beobachtbar, deshalb muss level durchgehend gelten.
 //
 // Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft.
 struct TwistTuning {
     float    onDeg     =  70.f;   // so weit muss die Ausdrehung reichen
     float    backDeg   =  30.f;   // darunter gilt der Unterarm wieder als gerade
 
-    // Fenster fuer die GANZE Bewegung, gemessen ab dem Verlassen der
-    // Neutralzone. Frueher lief es erst ab onDeg, ein langsames Ausdrehen war
-    // damit gratis.
+    // Fenster fuer die ganze Bewegung, gemessen ab dem Verlassen der
+    // Neutralzone - nicht erst ab onDeg, sonst waere langsames Ausdrehen gratis.
     uint32_t maxMs     = 1400;
     uint32_t lockoutMs =  800;    // Ruhe nach einem Schaltvorgang
 
@@ -56,8 +45,7 @@ public:
         if (twistRateDps > t_.stillDps) tTurning_ = now_ms;
 
         // Betrag statt Vorzeichen: onDeg ist anatomisch nur in einer
-        // Drehrichtung erreichbar, und welche das ist, muss der Code nicht
-        // wissen.
+        // Drehrichtung erreichbar.
         const float tilt = fabsf(relTwistDeg);
         const bool  home = tilt <= t_.backDeg;
 
@@ -66,9 +54,9 @@ public:
         return e;
     }
 
-    // Der Controller meldet eine Erschuetterung ueber der Abbruchschwelle. OB
-    // sie die laufende Ausdrehung verbraucht, entscheidet dieses Modul: nur ein
-    // ruhender Unterarm kann gepincht haben, ein drehender erschuettert sich
+    // Der Controller meldet eine Erschuetterung ueber der Abbruchschwelle; ob
+    // sie die laufende Ausdrehung verbraucht, entscheidet dieses Modul. Nur ein
+    // ruhender Unterarm kann gepincht haben - ein drehender erschuettert sich
     // selbst.
     void reportShock(uint32_t now_ms) {
         if (phase_ != Phase::Out && phase_ != Phase::Back) return;
@@ -101,9 +89,8 @@ private:
         }
 
         if (phase_ == Phase::Idle) {
-            // Nur auf der Flanke aus der Neutralzone heraus: nach einem Abbruch
-            // muss der Unterarm erst wieder heim, sonst begaenne die verworfene
-            // Geste im Stand einfach neu.
+            // Nur auf der Flanke aus der Neutralzone heraus, sonst begaenne
+            // eine abgebrochene Geste im ausgedrehten Stand einfach neu.
             if (level && wasHome_ && !home) {
                 phase_  = Phase::Out;
                 peak_   = tilt;
@@ -120,9 +107,8 @@ private:
 
         if (phase_ == Phase::Out) {
             if (peak_ < t_.onDeg) {
-                // Zu flach und schon wieder daheim: Alltagsbewegung, kein
-                // Versuch. Zurueck auf Anfang, damit die naechste Geste ihr
-                // volles Fenster bekommt.
+                // Zu flach und schon wieder daheim: Alltagsbewegung. Zurueck auf
+                // Anfang, damit die naechste Geste ihr volles Fenster bekommt.
                 if (home) phase_ = Phase::Idle;
             } else if (tilt < t_.onDeg) {
                 phase_ = Phase::Back;

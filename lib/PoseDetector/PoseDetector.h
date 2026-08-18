@@ -3,14 +3,10 @@
 #include <math.h>
 #include "AirMouseState.h"
 
-// Bildet Verdrehung und Armneigung auf eine Haltung ab:
-//
-//   Point  - Hand gerade gehalten.
-//   Idle   - Arm zu steil. Ergebnis allein des Neigungs-Gates, keine Zone der
-//            Verdrehung.
-//   Turned - Hand abgedreht. Diese Haltung ist der MODUS-WAEHLER: sie
-//            entscheidet, ob ein Pinch links oder rechts meint und ob eine
-//            Bewegung den Cursor bewegt oder scrollt (siehe AirMouseState).
+// Bildet Verdrehung und Armneigung auf eine Haltung ab: Point (Hand gerade),
+// Turned (Hand abgedreht) und Idle. Turned waehlt den Modus - ob ein Pinch
+// links oder rechts meint und ob eine Bewegung den Cursor fuehrt oder scrollt.
+// Idle entsteht allein aus dem Neigungs-Gate und ist keine Zone der Verdrehung.
 //
 // Zwei Gates: das enge, symmetrische level() ist Voraussetzung der
 // Ein/Aus-Drehgeste (TwistToggle liest es), das weite und asymmetrische

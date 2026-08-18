@@ -113,7 +113,7 @@ bis die LED langsam pulsiert.
 Alle hardwarefreien Module werden auf dem PC geprüft, ohne Board, in gut zehn Sekunden:
 
 ```powershell
-& $pio test -e native               # erwartet: 10 test cases: 10 succeeded
+& $pio test -e native               # erwartet: 11 test cases: 11 succeeded
 ```
 
 Das ist der schnellste Weg, eine Änderung zu prüfen — **vor** dem Firmware-Build, nicht
@@ -163,11 +163,13 @@ und damit auf dem PC testbar.
 | `AirMouseState` | Zustandsautomat; entscheidet, was ein Ereignis bedeutet | ✓ | ✓ |
 | `OrientationPointer` | Drehraten → Pixel (Deadzone, Filter, Kennlinie) | – | – |
 | `ScrollWheel` | Zeigerbewegung → Scroll-Schritte | ✓ | ✓ |
+| `MotionPipeline` | Rückstau zum HID: Pakete aufteilen, Weiche Cursor/Rad | ✓ | ✓ |
 | `SleepPolicy` | entscheidet, wann das Gerät schlafen geht | ✓ | ✓ |
 | `MouseHID` | USB-HID oder BLE-HID hinter einer Schnittstelle | – | – |
 | `Haptic` | Impuls-Sequenzer für den Vibrationsmotor | – | – |
 | `Battery` | Akkuspannung über den eingebauten Teiler | – | – |
 | `AirMouseController` | verdrahtet alles; einzige Stelle mit Seiteneffekten | – | – |
+| `Telemetry` | Teleplot-Ausgabe; beobachtet die Module, greift nicht ein | – | – |
 | `ei-model/` | generierter Code aus Edge Impulse, nicht von Hand ändern | – | – |
 
 ---

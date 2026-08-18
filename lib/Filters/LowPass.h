@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <math.h>
 
+// Tiefpass erster Ordnung, exakter Koeffizient statt Naeherung - dt schwankt
+// zwischen den Betriebszustaenden um den Faktor vier.
 class LowPass {
 public:
     explicit LowPass(float cutoffHz) : fc(cutoffHz) {}

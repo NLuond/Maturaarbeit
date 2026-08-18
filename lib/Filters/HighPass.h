@@ -2,6 +2,8 @@
 #include <Arduino.h>
 #include <math.h>
 
+// Hochpass erster Ordnung. Der erste Aufruf liefert 0 statt x: ohne
+// Vorgaengerwert waere jede Sprungantwort ein Scheinimpuls.
 class HighPass {
 public:
     explicit HighPass(float cutoffHz) : fc(cutoffHz) {}

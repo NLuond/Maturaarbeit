@@ -134,6 +134,11 @@ unruhigsten Moment genommen werden. Taugt als Beispiel für Kap. 6.
   der falschen Y-Ausblendung kann das jetzt zu viel sein – erst so messen, dann
   entscheiden (Casiez et al. 2008: zu niedrig schadet klar, zu hoch kaum).
 - [ ] **`mvfail`** beobachten – steigt der Zähler, gehen Pakete an BLE verloren.
+- [ ] **`PINCH_GYRO_GUARD` (100 °/s):** bei jedem Pinch schiesst `gyroSum` auf 200
+  bis 250. Am Gerät prüfen, ob die Spitze zum `env`-Maximum wieder abgeklungen ist
+  – sonst verwirft der Guard genau die Klicks, die er durchlassen soll.
+- [ ] **`ML_CONFIDENCE` (0.50):** Kontrolle ist `nClick` nach einer Stunde Arbeit
+  ohne bewusstes Pinchen. Bleibt der Zähler stehen, ist die Schwelle tragfähig.
 
 ## Versuch 0 — der ML-Weg (vor allen Sensor-Experimenten)
 

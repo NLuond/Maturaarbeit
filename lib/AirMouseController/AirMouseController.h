@@ -198,19 +198,17 @@ private:
     // --- Ereignisse -----------------------------------------------------
 
     void handleTwistGesture(float env, uint32_t now_ms) {
-        // Eine Erschuetterung MELDEN, nicht die Ausdrehung verwerfen: ob sie ein
-        // Pinch war, entscheidet TwistToggle an der eigenen Drehrate. Die Geste
-        // erschuettert das Board am Scheitel selbst, und ein blindes Verwerfen
-        // traf deshalb genau die Bewegung, die es schuetzen sollte.
-        // An der Schwelle und nicht am erkannten Klick, damit ein vom Modell
-        // verpasster Pinch nicht abschaltet.
+        // Nur melden, nicht selbst verwerfen: ob die Erschuetterung ein Pinch
+        // war, entscheidet TwistToggle an der eigenen Drehrate - die Geste
+        // erschuettert das Board am Scheitel selbst. An der Schwelle und nicht
+        // am erkannten Klick, damit ein vom Modell verpasster Pinch nicht
+        // abschaltet.
         if (fsm_.on() && env > cfg::TWIST_CANCEL_ENV) twistToggle_.reportShock(now_ms);
 
-        // Der ROHE Winkel, nicht der geglaettete: ein Tiefpass verzoegert eine
+        // Der rohe Winkel, nicht der geglaettete: ein Tiefpass verzoegert eine
         // Rampe um seine Zeitkonstante, und die Geste scheiterte damit
-        // ausgerechnet dann, wenn man sie zuegig ausfuehrt.
-        //
-        // settling(): nach dem Aufwachen ist der Winkel noch nicht verlaesslich.
+        // ausgerechnet bei zuegiger Ausfuehrung. settling(): nach dem Aufwachen
+        // ist der Winkel noch nicht verlaesslich.
         const bool levelOk = pose_.level() && !sleep_.settling();
         const float relRaw = arm::relDeg(twist_, cfg::TWIST_NEUTRAL_DEG);
         switch (twistToggle_.tick(relRaw, twistGuard_.rateDps(), levelOk, now_ms)) {
@@ -228,9 +226,9 @@ private:
         if (!pinched) return;
 
         // Der geglaettete Winkel ueberschreitet TURN_ON_DEG frueher, als die
-        // FSM-Haltung nachzieht (Haltezeit und Ruhezeit) - genau dieses Fenster
-        // deckt armOut ab. Bewusst NICHT twistToggle_.state(): das Modul liest
-        // den rohen Winkel, dessen Zittern wuerde den Pinch unterdruecken.
+        // FSM-Haltung nachzieht - genau dieses Fenster deckt armOut ab. Nicht
+        // twistToggle_.state(): das Modul liest den rohen Winkel, dessen
+        // Zittern wuerde den Pinch unterdruecken.
         const bool armOut = fabsf(pose_.relTwistDeg()) > cfg::TURN_ON_DEG;
         apply(fsm_.onPinch(armOut), now_ms);
     }

@@ -99,9 +99,9 @@ der die Verspätung jedes einzelnen Takts in µs ausgibt — siehe Abschnitt 9.1
 
 ---
 
-## 4. Die fünf Rollen
+## 4. Die sechs Rollen
 
-Der Code ist in fünf Rollen aufgeteilt, und die Trennung wird strikt eingehalten:
+Der Code ist in sechs Rollen aufgeteilt, und die Trennung wird strikt eingehalten:
 
 | Schicht | Rolle | Module |
 |---|---|---|
@@ -109,7 +109,8 @@ Der Code ist in fünf Rollen aufgeteilt, und die Trennung wird strikt eingehalte
 | **Ableitung** | Messwerte in Grössen umrechnen | `MadgwickAHRS`, `ArmOrientation`, `Filters/` |
 | **Erkenner** | aus Grössen Ereignisse machen | `PoseDetector`, `TwistToggle`, `TwistGuard`, `PinchDetector`, `SleepPolicy` |
 | **Zustand** | entscheiden, was ein Ereignis bedeutet | `AirMouseState` |
-| **Ausführung** | Entscheidungen umsetzen | `AirMouseController`, `OrientationPointer`, `ScrollWheel` |
+| **Ausführung** | Entscheidungen umsetzen | `AirMouseController`, `OrientationPointer`, `MotionPipeline`, `ScrollWheel` |
+| **Beobachtung** | Zustand sichtbar machen, ohne einzugreifen | `Telemetry` |
 
 Die wichtigste Regel: **`AirMouseState` hält den gesamten Zustand und führt selbst nichts
 aus.** Jedes Ereignis liefert ein `Actions`-Struct zurück, das beschreibt, *was zu tun
@@ -124,9 +125,9 @@ gehalten werden — jede Änderung konnte sie auseinanderlaufen lassen.
 
 Die zweite Regel: **Erkenner und Zustand kennen keine Hardware.** In
 `AirMouseState`, `ArmOrientation`, `TwistToggle`, `TwistGuard`, `PinchDetector`,
-`PoseDetector`, `ScrollWheel`, `SleepPolicy`, `MadgwickAHRS` und `Filters/OneEuro.h`
-steht kein `#include <Arduino.h>`, kein `config.h`, kein Bluetooth und nichts aus dem
-Edge-Impulse-SDK. Genau das macht sie auf dem PC testbar (Abschnitt 10).
+`PoseDetector`, `ScrollWheel`, `MotionPipeline`, `SleepPolicy`, `MadgwickAHRS` und
+`Filters/OneEuro.h` steht kein `#include <Arduino.h>`, kein `config.h`, kein Bluetooth
+und nichts aus dem Edge-Impulse-SDK. Genau das macht sie auf dem PC testbar (Abschnitt 10).
 
 Zwei Module halten diese Regel bewusst *nicht* ein und stehen deshalb hier: `Filters/`
 `LowPass`/`HighPass` benutzen die Arduino-Konstante `PI`, und `OrientationPointer` zieht
@@ -651,9 +652,9 @@ rund 250 °/s des normalen Gebrauchs lag.
 
 ### 6.10 Scrollen — `ScrollWheel`
 
-Gescrollt wird mit **derselben Armbewegung wie gezeigt**. `runMotion()` rechnet die
-Bewegung genau einmal; im Scroll-Modus geht ihre senkrechte Komponente ins Rad statt an
-den Cursor, geteilt durch `SCROLL_PX_PER_STEP`. Das Modul selbst ist nur noch ein
+Gescrollt wird mit **derselben Armbewegung wie gezeigt**. `OrientationPointer` rechnet
+die Bewegung genau einmal in Pixel; im Scroll-Modus geht ihre senkrechte Komponente ins
+Rad statt an den Cursor, geteilt durch `SCROLL_PX_PER_STEP`. Das Modul selbst ist nur noch ein
 Akkumulator mit Drosselung und Begrenzung — Bruchteile bleiben stehen und laufen auf, so
 dass eine langsame Bewegung dieselbe Gesamtzahl Schritte ergibt wie eine schnelle.
 
@@ -667,7 +668,26 @@ Implementierung, sondern eine der Bedienung.
 `reset()` verwirft den aufgelaufenen Rest ausserhalb der abgedrehten Haltung: er darf nicht
 in die nächste Scroll-Sitzung überschwappen und dort sofort einen Schritt auslösen.
 
-### 6.11 Ausgabe — `MouseHID`, `Haptic`
+### 6.11 Rückstau der Bewegung — `MotionPipeline`
+
+Zwischen dem Zeiger und dem HID liegt ein Puffer, und zwar aus zwei Gründen: ein
+HID-Bericht trägt nur ±127 Pixel je Achse, und über BLE geht nur **ein** Bericht je
+Verbindungsintervall durch. `MotionPipeline` hält diesen Rückstau.
+
+Sie bekommt pro Takt die fertigen Pixel und ein `MotionTarget` — `Cursor`, `Wheel` oder
+`None` — und entscheidet daraus, wohin die Bewegung geht. Für den Cursor summiert sie
+auf, schickt alle `MOVE_INTERVAL_US` bis zu `MOVE_MAX_REPORTS` Berichte los und zieht
+eine gesendete Strecke **erst dann** ab, wenn das Paket angenommen wurde. Lehnt die
+Gegenstelle ab, wird der Rückstau bei `MOVE_BACKLOG_MAX` gekappt: nähme sie minutenlang
+nichts an, schösse der Cursor beim Verbinden sonst quer über den Schirm.
+
+Den Sendeweg bekommt sie als **Callable** übergeben, genau wie `PinchDetector` seinen
+Klassifikator. Deshalb kennt sie das HID nicht, bindet weder `Arduino.h` noch `config.h`
+ein und läuft im PC-Test (`test_motion_pipeline`) — dort ist der Empfänger eine Attrappe,
+die sich auf Kommando als „Warteschlange voll" meldet. Genau dieser Fall ist am Gerät
+kaum reproduzierbar und war zugleich der, in dem früher Bewegung verlorenging.
+
+### 6.12 Ausgabe — `MouseHID`, `Haptic`
 
 `MouseHID` kapselt die beiden Übertragungswege hinter einer gemeinsamen Schnittstelle:
 TinyUSB für USB-HID, bluefruit für BLE-HID, umgeschaltet über `USE_BLE_HID`. Es wird immer
@@ -698,6 +718,25 @@ Eine feste Sperrfrist gibt es bewusst nicht. Sie müsste über der Musterdauer v
 liegen, `DEBOUNCE_MS` steht aber auf 180 ms — ein Doppelklick würde damit nur noch einmal
 brummen. Gesperrt ist stattdessen genau, solange ein Muster läuft, plus `HAPTIC_REST_MS`
 danach.
+
+### 6.13 Beobachtung — `Telemetry`
+
+Die Teleplot-Ausgabe (`>name:wert`, eine Zeile je Kanal) liegt in einem eigenen Modul.
+Es hält `const`-Referenzen auf alle übrigen Module und liest sie von aussen; im Controller
+stehen dafür nur noch zwei Zeilen. `Telemetry` ist damit das einzige Modul, das quer durch
+das ganze System liest — vertretbar, weil es nirgends eingreift und niemand von ihm
+abhängt.
+
+Es enthält bewusst **kein** `#if`. Die Schalter `DEBUG_TELEPLOT` und `DEBUG_SET` werden zu
+den Compile-Konstanten `kEnabled` und `kSet`, und die Kanalgruppen hängen an gewöhnlichen
+`if`-Abfragen darauf. Der Optimierer entfernt die abgeschalteten Zweige samt ihrer
+`Serial`-Aufrufe: gemessen 188 388 gegen 185 620 Bytes Flash, also rund 2.7 kB, die im
+Auslieferungsbuild verschwinden.
+
+Vorher standen dieselben 150 Zeilen im Controller, mit sechzehn `#if`-Zweigen und zwei
+leeren Zwillingsfunktionen (`void trackEnvPeak(float) {}`), damit der Code ohne
+Debug-Schalter überhaupt übersetzt. Das zerriss den Lesefluss genau in den Methoden, die
+man als Erstes ansieht.
 
 ---
 
@@ -1063,7 +1102,7 @@ Einzelheiten dazu im Messplan in `TODO.md`.
 
 ## 10. Testbarkeit
 
-Zehn Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in gut zehn
+Elf Testdateien laufen **auf dem PC**, ohne Mikrocontroller, ohne Board, in gut zehn
 Sekunden:
 
 | Test | prüft | Include-Pfad |
@@ -1075,6 +1114,7 @@ Sekunden:
 | `test_twist_guard` | Verdrehungsbremse | `-I lib/TwistGuard` |
 | `test_pinch_detector` | Klick-Entscheidung | `-I lib/PinchDetector` |
 | `test_scroll_wheel` | Rad-Ausgabe | `-I lib/ScrollWheel` |
+| `test_motion_pipeline` | Rückstau zum HID | `-I lib/MotionPipeline -I lib/ScrollWheel` |
 | `test_one_euro` | 1-Euro-Filter | `-I lib/Filters` |
 | `test_pinch_features` | Kanalbelegung des Modells | `-I lib/ImuReader -I lib/PinchFeatures` |
 | `test_sleep_policy` | Schlaf-Entscheidung | `-I lib/SleepPolicy` |
@@ -1082,7 +1122,7 @@ Sekunden:
 Alle auf einmal:
 
 ```powershell
-pio test -e native        # erwartet: "10 test cases: 10 succeeded"
+pio test -e native        # erwartet: "11 test cases: 11 succeeded"
 ```
 
 Einzeln, ohne PlatformIO — die Zeile dafür steht im Kopf jeder Testdatei:
