@@ -7,11 +7,21 @@
 #if COLLECT_MODE
 #include "VibrationEnvelope.h"
 #include "PinchFeatures.h"
+#include "CollectLink.h"
+#endif
+#if BENCH_INFERENCE
+#include "PinchClassifier.h"
+#if !USE_ML_PINCH
+#error "BENCH_INFERENCE braucht USE_ML_PINCH"
+#endif
 #endif
 
 ImuReader          imu;
 MouseHID           mouse;
 AirMouseController app(mouse, imu);
+#if COLLECT_MODE
+CollectLink        link;
+#endif
 
 // Der einzige Zustand, den die Schleife ueber einen Takt hinaus traegt.
 static uint32_t nextSample_us = 0;
@@ -24,12 +34,44 @@ static uint16_t overruns = 0;
 static uint32_t tOvrDbg = 0;
 #endif
 
+#if BENCH_INFERENCE
+// Statisch, nicht auf dem Stapel: die beiden Fensterpuffer sind zusammen rund
+// anderthalb Kilobyte.
+static PinchClassifier bench;
+
+// Ein voll gefuelltes Fenster mit plausiblen Werten. Die Rechenzeit eines
+// Faltungsnetzes haengt nicht vom Inhalt ab, aber lauter Nullen koennen in der
+// Gleitkomma-Vorverarbeitung einen Sonderfall treffen.
+static void benchInference() {
+    Serial.begin(115200);
+    const uint32_t tWait = millis();
+    while (!Serial && millis() - tWait < 5000) delay(10);
+
+    ImuSample s{};
+    s.ax  = 0.02f;  s.ay  = -0.01f; s.az  = 1.00f;
+    s.lax = 0.03f;  s.lay = -0.02f; s.laz = 0.01f;
+    s.gx  = 4.0f;   s.gy  = -3.0f;  s.gz  = 2.0f;
+    s.accMag = 1.0f; s.gyroSum = 9.0f;
+    while (!bench.ready()) bench.push(s, 0.05f);
+
+    constexpr int kRuns = 100;
+    const uint32_t t0 = micros();
+    for (int i = 0; i < kRuns; i++) (void)bench.isPinch();
+    const uint32_t dt = micros() - t0;
+
+    Serial.print("inferenz_us: ");   Serial.println(dt / kRuns);
+    Serial.print("davon_dsp_us: ");  Serial.println(bench.lastDspUs());
+    Serial.print("davon_netz_us: "); Serial.println(bench.lastNnUs());
+    Serial.print("takt_budget_us: ");Serial.println(cfg::SAMPLE_INTERVAL_US);
+}
+#endif
+
 void setup() {
     // Das Mikrofon wird nie benutzt und bleibt aktiv abgeschaltet.
     pinMode(PIN_PDM_PWR, OUTPUT);
     digitalWrite(PIN_PDM_PWR, LOW);
 
-#if DEBUG_TELEPLOT || COLLECT_MODE
+#if DEBUG_TELEPLOT && !COLLECT_MODE
     Serial.begin(115200);
 #endif
     imu.begin();
@@ -48,11 +90,19 @@ void setup() {
 #endif
 #endif
 #if COLLECT_MODE
+    // Der Sendeweg bringt seinen eigenen Anschluss mit: Serial im USB-Zweig,
+    // die SoftDevice im BLE-Zweig.
+    link.begin();
+
     // Aufnahme-Warnleuchte, aktiv LOW: sie geht bei einem verpassten
-    // Abtastschritt an und bleibt bis zum Reset an. Leuchtet sie danach, ist der
-    // Datensatz zeitlich gedehnt - dem CSV selbst sieht man das nicht an.
+    // Abtastschritt oder einer nicht abgegebenen Zeile an und bleibt bis zum
+    // Reset an. Leuchtet sie danach, ist der Datensatz gedehnt oder
+    // lueckenhaft - dem CSV selbst sieht man das nicht an.
     pinMode(LED_BUILTIN, OUTPUT);
     digitalWrite(LED_BUILTIN, HIGH);
+#endif
+#if BENCH_INFERENCE
+    benchInference();
 #endif
     nextSample_us = micros();
 }
@@ -96,7 +146,8 @@ void loop() {
     const uint32_t tickUs = cfg::SAMPLE_INTERVAL_US;
     const float    tickDt = cfg::DT;
 #else
-    // AKTIV braucht die 209 Hz des ML-Modells, BEREIT nur die Drehgeste.
+    // AKTIV braucht die volle Sensorrate fuer das ML-Fenster, BEREIT nur die
+    // Drehgeste.
     const bool     active = app.wantsActiveRate();
     const uint32_t tickUs = active ? cfg::SAMPLE_INTERVAL_US : cfg::READY_INTERVAL_US;
     const float    tickDt = active ? cfg::DT                 : cfg::READY_DT;
@@ -128,13 +179,7 @@ void loop() {
     float f[feat::CHANNELS];
     feat::pack(s, env, f);
 
-    for (int i = 0; i < feat::CHANNELS; i++) {
-        if (i) Serial.print(',');
-        // Kanal 0 ist die Huellkurve: sie bewegt sich zwischen 0.005 und 0.125,
-        // bei drei Stellen bliebe am unteren Ende eine signifikante Ziffer.
-        Serial.print(f[i], i == 0 ? 4 : 3);
-    }
-    Serial.println();
+    if (!link.send(f)) digitalWrite(LED_BUILTIN, LOW);   // aktiv LOW, gelatcht
 #else
     app.update(s, tickDt, now_us);
 

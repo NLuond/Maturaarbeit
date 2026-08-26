@@ -22,13 +22,13 @@ Der Build ist wegen des Edge-Impulse-SDK langsam und **sehr** gespraechig; Ausga
 (`2>&1 | Select-Object -Last 20`). Interessant ist nur die RAM/Flash-Zeile und `SUCCESS`.
 
 Zustandsautomat, Winkel-Ableitung und die anderen hardwarefreien Module werden auf dem PC
-getestet, nicht auf dem Chip. Alle elf auf einmal:
+getestet, nicht auf dem Chip. Alle zwoelf auf einmal:
 
 ```powershell
 & "$env:USERPROFILE\.platformio\penv\Scripts\platformio.exe" test -e native
 ```
 
-Erwartet: `11 test cases: 11 succeeded`. Das laeuft in gut zehn Sekunden und ist der
+Erwartet: `12 test cases: 12 succeeded`. Das laeuft in gut zehn Sekunden und ist der
 schnellste Weg, eine Aenderung an einem dieser Module zu pruefen — vor dem Firmware-Build,
 nicht danach.
 
@@ -50,9 +50,16 @@ durchgelaufen ist. Genau deshalb funktioniert der g++-Einzeiler. Fuer `pio test`
 Testfaelle; das Format `N Pruefungen, M Fehler` und `FEHLER Zeile N: ...` ist damit Teil
 der Schnittstelle und darf nicht beilaeufig geaendert werden.
 
+Die PC-seitige BLE-Bruecke bringt ihren eigenen Selbsttest im selben Format mit — ohne
+Geraet, ohne COM-Port, ohne bleak:
+
+```powershell
+py tools/ble_collect_bridge.py --selftest
+```
+
 Alles andere wird weiterhin ueber Kompilieren + Messen am Geraet (Teleplot) verifiziert.
 
-Alle elf Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt — weder
+Alle zwoelf Testdateien haengen daran, dass der jeweilige Header hardwarefrei bleibt — weder
 `Arduino.h` noch `config.h`: `AirMouseState.h`, `ArmOrientation.h`, `TwistToggle.h`,
 `TwistGuard.h`, `SleepPolicy.h`, `PoseDetector.h`, `PinchDetector.h`, `ScrollWheel.h`,
 `MotionPipeline.h`, `OneEuro.h`, `PinchFeatures.h`/`ImuSample.h` und `MadgwickAHRS.h`. Die `-I`-Liste in
@@ -83,6 +90,7 @@ Es gibt keine Laufzeit-Konfiguration. Alle Betriebsarten sind `#define`s ganz ob
 | Schalter | Wirkung |
 |---|---|
 | `COLLECT_MODE` | `main.cpp` sendet statt HID nur CSV (`env,gyro/100,lax,lay,laz`) fuer Edge Impulse. HID/Controller werden gar nicht erst initialisiert. |
+| `COLLECT_OVER_BLE` | Die Aufnahme laeuft ueber BLE-UART (Nordic UART Service) statt ueber USB-Serial; jede Zeile traegt dann einen 16-Bit-Zaehler. Gegenstueck auf dem PC ist `tools/ble_collect_bridge.py`. Nur mit `COLLECT_MODE` wirksam. |
 | `DEBUG_TELEPLOT` | Teleplot-Kanaele (`>name:wert`) aus `Telemetry`. Kostet Serial-Bandbreite und bremst die Schleife — fuer echte Nutzungstests aus. |
 | `USE_ML_PINCH` | ML-Klassifikator gegen reine Schwellwert-Erkennung (`envGate`). |
 | `USE_BLE_HID` | BLE (bluefruit) gegen USB-HID (TinyUSB) in `MouseHID.h`. |
@@ -119,23 +127,42 @@ Schleifentakt aus, der Controller die IMU-Rate:
 
 | Zustand | Bedingung | IMU-Rate | Funk | Schleifentakt |
 |---|---|---|---|---|
-| AKTIV | Maus eingeschaltet (`fsm_.on()`) | 208 Hz | an | `cfg::SAMPLE_INTERVAL_US` (209 Hz) |
+| AKTIV | Maus eingeschaltet (`fsm_.on()`) | 208 Hz | an | `cfg::SAMPLE_INTERVAL_US` (208 Hz) |
 | BEREIT | ausgeschaltet, aber innerhalb `SleepTuning::sleepAfterMs` (60 s) bewegt | 52 Hz | an | `cfg::READY_INTERVAL_US` (52 Hz) |
 | SCHLAF | 60 s ohne Bewegung (`gyroSum < SleepTuning::stillDps`) | nur Beschleunigungssensor, Wake-on-Motion auf INT1 | aus | `loop()` suspendiert (`suspendLoop()`), IMU weckt per Interrupt |
 
-Eingeschlafen wird nur aus BEREIT, nie aus AKTIV — sonst verschwaende die Maus mitten im
-Gebrauch, waehrend man den Cursor nur ruhig auf einem Ziel haelt. Es gibt bewusst kein
+Aus AKTIV fuehrt der Weg nach 5 min Ruhe (`SleepTuning::offAfterMs`) ueber ein
+Selbst-Abschalten nach BEREIT, von dort nach weiteren 60 s in den SCHLAF.
+
+Eingeschlafen wird nur aus BEREIT, nie direkt aus AKTIV — sonst verschwaende die Maus
+mitten im Gebrauch, waehrend man den Cursor nur ruhig auf einem Ziel haelt. Nach
+`SleepTuning::offAfterMs` (5 min) ohne Bewegung schaltet sie sich aus AKTIV aber selbst ab
+(`SleepEvent::PowerOff` → `fsm_.onPower()`, also derselbe Weg wie die Drehgeste samt langem
+Brummer) und faellt damit nach BEREIT, wo die kurze Ruhezeit uebernimmt. Ohne das laeuft
+eine eingeschaltet abgelegte Maus die ganze Nacht mit vollem Takt und Funk: `tQuiet_` wurde
+frueher bei jedem Takt zurueckgesetzt, solange `mouseOn` galt.
+
+Beim Abschalten laeuft die Ruhezeit **neu** an. Das ist keine Kosmetik: `Haptic` schaltet
+den Motor in `trigger()` auf HIGH und erst in `update()` wieder LOW — ginge das Geraet im
+selben Takt schlafen, bliebe der Motor des langen Ein/Aus-Impulses an.
+
+`BLE_ALWAYS_ON` gehoert dazu: auf `true` ist `radioOff()` eine leere Huelle, das Geraet
+wirbt also auch im Schlaf weiter (sichtbar an der blinkenden blauen `LED_CONN`) und der
+Funk bleibt der groesste Verbraucher. Vorgabe ist `false`; auffindbar bleibt das Geraet
+ueber Wake-on-Motion, eine Bewegung genuegt.
+
+Es gibt bewusst kein
 System OFF: das RAM bleibt erhalten und damit der ueber Minuten gelernte Gyro-Nullpunkt
 und die BLE-Verbindung, ein Reset wuerde beides kosten.
 
 ## Architektur
 
-`src/main.cpp` ist bewusst duenn: fester Takt + IMU lesen, dann entweder CSV ausgeben
-(`COLLECT_MODE`) oder `AirMouseController::update()` aufrufen. Die Schleife arbeitet mit
+`src/main.cpp` ist bewusst duenn: fester Takt + IMU lesen, dann entweder die CSV-Zeile an
+`CollectLink` geben (`COLLECT_MODE`) oder `AirMouseController::update()` aufrufen. Die Schleife arbeitet mit
 **fester Schrittweite**, nicht mit der gemessenen Zeitdifferenz — Filter und ML-Fenster
 brauchen eine konstante Abtastrate; nach einer Stockung wird neu ausgerichtet statt
 nachgeholt. `cfg::DT` ist dabei nicht mehr die einzige Schrittweite: sie gilt nur in
-AKTIV, in BEREIT laeuft die Schleife mit `cfg::READY_DT` (52 Hz statt 209 Hz) — der
+AKTIV, in BEREIT laeuft die Schleife mit `cfg::READY_DT` (52 Hz statt 208 Hz) — der
 ML-Pfad braucht die volle Rate ohnehin nur, solange die Maus eingeschaltet ist, und laeuft
 ausschliesslich in AKTIV.
 
@@ -147,8 +174,8 @@ das Modul hardwarefrei ist und einen PC-Test bekommt.
 Die Policy-Module (`AirMouseState`, `ArmOrientation`, `PinchDetector`, `TwistToggle`,
 `TwistGuard`, `PoseDetector`, `ScrollWheel`, `MotionPipeline`, `OrientationPointer`,
 `SleepPolicy`, `Filters/`) kennen weder Hardware noch das EI-SDK. Beides ist auf
-`ImuReader`, `MouseHID`, `Haptic`, `Battery`, `PinchClassifier` und `Telemetry`
-beschraenkt. Diese Richtung beim Erweitern
+`ImuReader`, `MouseHID`, `CollectLink`, `Haptic`, `Battery`, `PinchClassifier` und
+`Telemetry` beschraenkt. Diese Richtung beim Erweitern
 beibehalten — nichts aus `lib/ei-model` oder `bluefruit` gehoert in ein Policy-Modul.
 
 Streng hardwarefrei (weder `Arduino.h` noch `config.h`) sind davon alle ausser
@@ -217,16 +244,43 @@ kurzer, die ohnehin zu einem Brummen verschmelzen wuerde.
 `AirMouseController` verdrahtet nur noch: Ereignisse einsammeln → FSM fragen → `apply()`.
 Ablauf pro Tick:
 
-1. `TwistToggle` — die Ein/Aus-Geste ersetzt das fruehere Schuetteln: Unterarm um rund
-   90 Grad abdrehen und wieder zurueck schaltet ein oder aus (`TwistEvent::Toggle`).
-   `maxMs` (1400 ms) gilt fuer die **ganze Bewegung**, gemessen ab dem Verlassen der
-   Neutralzone (`TWIST_BACK_DEG`) — nicht erst ab dem Ueberschreiten von `onDeg`. Das
-   ist die **einzige** Bedeutung der Geste: wer laenger draussen bleibt, ist einfach in
-   der Haltung `Turned`, und wie weit ausgedreht wird, spielt keine Rolle.
-   Vier Phasen, im Teleplot-Kanal `tw` ablesbar: 0 = Ruhe, 1 = ausgedreht, 2 = auf dem
-   Rueckweg, 3 = Lockout, 4 = durch einen Pinch verbraucht. `Idle -> Out` zuendet nur
-   auf der **Flanke** aus der Neutralzone heraus, sonst begaenne eine abgebrochene Geste
-   im ausgedrehten Stand einfach neu und das Zurueckdrehen schaltete doch.
+1. `TwistToggle` — die Ein/Aus-Geste: Unterarm zuegig um `onDeg` (45 Grad) drehen
+   und binnen `maxMs` (1200 ms) zurueck schaltet ein oder aus (`TwistEvent::Toggle`).
+   **Gemessen wird der AUSSCHLAG, integriert aus der rohen Drehrate `s.gy` ab dem
+   Beginn der Bewegung — kein Winkel gegen `TWIST_NEUTRAL_DEG`.** Damit haengt die
+   Geste weder an der Schwerkraft noch an einer festen Ruhelage, braucht keine
+   Einschwingzeit und kennt keine Singularitaet bei steilem Unterarm; vorher waren das
+   vier Wege, auf denen sie lautlos scheiterte. Integriert wird nur *waehrend* der
+   Geste, ein Gyro-Nullpunktfehler summiert sich also nicht auf (3 Grad/s ueber 1.2 s
+   sind 3.6 Grad gegen 45).
+   Bewusst **nicht** `TwistGuard::rateDps()`: jene Rate soll die Verdrehung
+   *vollstaendig* erfassen und holt sich dafuer die Lage dazu, hier zaehlt nur der
+   Ausschlag. Der Schiefstand zwischen Unterarm- und Platinenachse kostet cos(Winkel),
+   bei 15 Grad rund drei Prozent — bezahlbar gegen vier Totalausfaelle.
+   Der Ausschlag ist deshalb **von der Haltung entkoppelt**: `TWIST_ON_DEG` (45,
+   relativ) und `TURN_ON_DEG` (70, absolut) sind zwei verschiedene Groessen, ein
+   `static_assert` haelt die Geste unter der Haltungsschwelle.
+   **Der Ausschlag allein traegt die Geste nicht** — 45 Grad Unterarmdrehung kommen im
+   Alltag staendig vor. Was sie zur Geste macht, sind **zwei Bedingungen am Start**, und
+   beide gelten NUR dort:
+   - `level()` (`LEVEL_MAX_DEG`, 30 Grad): die Maus wird gerade waagrecht benutzt.
+     Waehrend der Geste wird nicht mehr geprueft — die Drehung schwenkt `elev` selbst
+     mit, weil die Platinenachse nicht exakt auf der anatomischen Drehachse liegt, und
+     ein laufendes Gate wuergte die eigene Geste ab.
+   - `armedMs` (200 ms): der Unterarm muss vorher geruht haben. Eine bewusste Geste
+     beginnt aus der Ruhe, Alltagsbewegung ist durchgehend.
+   Beide zaehlen ihre Ablehnungen (`nTwLvl`, `nTwMov`) — das sind **verhinderte
+   Fehlauslösungen** und deshalb erwartungsgemaess grosse Zahlen. Verdaechtig werden sie
+   erst, wenn eine gemeinte Geste ausbleibt und einer von beiden dabei hochgeht.
+   `outMaxMs` (600 ms) verlangt zusaetzlich einen **zuegigen Hinweg**.
+   Das ist die **einzige** Bedeutung der Geste: wer laenger draussen bleibt, ist einfach
+   in der Haltung `Turned`, und wie weit gedreht wird, spielt keine Rolle.
+   Vier Phasen, im Teleplot-Kanal `tw` ablesbar: 0 = Ruhe, 1 = dreht heraus,
+   2 = Ausschlag erreicht, 3 = Lockout, 4 = durch einen Pinch verbraucht. `twexc` zeigt
+   den laufenden Ausschlag in Grad — der Kanal, an dem `TWIST_ON_DEG` eingestellt wird.
+   `Idle -> Out` zuendet nur auf der **Flanke** der Drehrate: nach einem Abbruch dreht
+   sich der Unterarm noch, und ohne die Flanke begaenne die Rueckdrehung sofort eine
+   neue Geste in der Gegenrichtung.
    **Die Erschuetterung wird nur gemeldet (`reportShock()`), nicht mehr gewertet.** Ob
    sie die Ausdrehung verbraucht, entscheidet `TwistToggle` an der Drehrate: nur wenn
    der Unterarm zuvor `stillMs` (150 ms) lang unter `stillDps` (40 Grad/s) blieb, war
@@ -241,14 +295,27 @@ Ablauf pro Tick:
    Waagrecht-Gate (`LEVEL_MAX_DEG`) und das Fenster (`maxMs`). Jede zaehlt
    inzwischen mit (`nTwCan`, `nTwLvl`, `nTwSlow` im Teleplot) — ohne das ist eine
    verschluckte Geste von Unzuverlaessigkeit nicht zu unterscheiden.
-   Beim Einschalten setzt `Actions::resetPose` die Haltung auf
-   `Point` zurueck — der Nullpunkt der Verdrehung ist dagegen fest
-   (`cfg::TWIST_NEUTRAL_DEG`) und wird *nicht* beim Einschalten kalibriert: das geschah
-   frueher direkt nach dem Schuetteln, wo die Lageschaetzung am staerksten gestoert war,
-   und ergab jedes Mal einen anderen Bezug.
+   Beim Einschalten setzt `Actions::resetPose` die Haltung auf `Point` zurueck. Einen
+   Nullpunkt braucht die **Geste** seit dem Umbau auf den Ausschlag gar nicht mehr;
+   `cfg::TWIST_NEUTRAL_DEG` gehoert nur noch der **Haltung** (`PoseDetector`) und ist
+   dort fest statt beim Einschalten kalibriert: das geschah frueher direkt nach der
+   Schaltgeste, wo die Lageschaetzung am staerksten gestoert ist, und ergab jedes Mal
+   einen anderen Bezug.
 2. `MadgwickAHRS` — Lage aus Gyro+Accel; liefert `upX/upY/upZ`, die Richtung von "oben"
    im Koerperkoordinatensystem. Bewusst **kein** `rollDeg()`/`pitchDeg()` mehr, siehe
    unten.
+   **Die Lage wird gesetzt, nicht eingeschwungen.** Beim Start und nach jedem Aufwachen
+   steht `oriented_` auf false, und der Controller ruft jeden Takt
+   `seedFromAccel()`: ein einzelner Messwert legt die Lage bis auf die (ohnehin nicht
+   beobachtbare) Drehung um die Lotrechte fest. Sobald einer davon nach reiner
+   Schwerkraft aussieht (`|accMag - 1 g| <= cfg::SEED_ACC_TOL`), rastet die Schaetzung in
+   genau diesem Takt ein und `oriented_` bleibt stehen. Waehrend der Bewegung ist das
+   Setzen nur eine grobe Schaetzung — aber immer noch besser als die Flach-Annahme der
+   Einheitsquaternion, von der der Filter frueher aus losgelaufen ist.
+   Das ersetzt das komplette Einschwing-Geruest: `MADGWICK_BETA_FAST`,
+   `SleepTuning::settleMs`, `SleepEvent::Settled` und `SleepPolicy::settling()` gibt es
+   nicht mehr. Die Drehgeste haengt jetzt an `oriented_` statt an einem Zeitfenster und
+   ist nach dem Aufwachen sofort da, sobald der Arm einen Takt lang ruhig ist.
    `ArmOrientation` macht daraus die beiden benannten Winkel: `twistDeg` (Verdrehung um
    die Unterarmachse) und `elevDeg` (Neigung des Unterarms aus der Waagerechten). Der
    Controller rechnet sie einmal pro Tick und verteilt sie — kein Modul holt sich seinen
@@ -320,6 +387,7 @@ Ablauf pro Tick:
    `kEnabled` (aus `DEBUG_TELEPLOT`) und `kSet` (aus `DEBUG_SET`) — der Optimierer wirft
    die abgeschalteten Zweige samt Serial-Aufrufen weg, gemessen rund 2.7 kB Flash.
 7. `SleepPolicy` — am Ende jedes Takts befragt, mit `fsm_.on()` und `gyroSum`. Liefert sie
+   `PowerOff`, schaltet der Controller die Maus ueber `fsm_.onPower()` aus; liefert sie
    `GoToSleep`, bereitet das **private** `prepareSleep()` nur Funk und IMU vor
    (`radioOff()`, IMU auf Sleep-Rate + Wake-on-Motion); das eigentliche Schlafenlegen
    (`suspendLoop()`) und Aufwecken fuehrt `main.cpp` aus, weil dort der Schleifentakt
@@ -356,6 +424,8 @@ Wichtige Eigenheiten, die man sonst kaputt macht:
 Generierter Code aus Studio-Projekt **1084395**, Export **v3** — **nicht von Hand
 editieren**, beim Update den ganzen Ordner ersetzen. Aktuelles Modell: **2 Klassen**
 (`non_pinch`, `pinch`), 5 Kanaele, Fenster **40 Samples** @ 209 Hz (~191 ms),
+**Achtung: die 209 Hz sind die im Studio hinterlegte Rate des Modells, nicht der
+Schleifentakt** — der folgt dem Sensor mit 208 Hz (siehe unten),
 **Rohsignal + 1D-CNN**, int8.
 
 Struktur und Kopplung sind seit v1 unveraendert (gleiches Projekt, gleiche Fenster- und
@@ -373,7 +443,7 @@ Die Klassennamen sind Schnittstelle: `PinchClassifier::isPinch()` sucht per `str
 Klasse **`pinch`**. Wie die Gegenklasse heisst, ist gleichgueltig — sie wird nie gelesen.
 
 Die Abtastrate ist die kritische Kopplung: `PinchClassifier.h` haelt per `static_assert`
-`cfg::SAMPLE_INTERVAL_US` (4785 µs) mit `EI_CLASSIFIER_INTERVAL_MS` zusammen, ebenso die
+`cfg::SAMPLE_INTERVAL_US` (4808 µs) mit `EI_CLASSIFIER_INTERVAL_MS` zusammen, ebenso die
 Kanalzahl mit `EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME`.
 
 Die Kanal-Reihenfolge steht **nur** in `feat::pack()` (`lib/PinchFeatures/`). Sowohl der
@@ -415,7 +485,7 @@ Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
 - Namensgebung, ueber alle Module hinweg einheitlich zu halten:
   Zeitstempel `t<Ereignis>_` (`tQuiet_`, `tMove_`, `tLastPinch_`), Zaehler `n<Grund>_`
   (`nDebounce_`, `nMoveFail_`), Winkel mit Suffix `Deg`, Raten mit `Dps` oder `Hz`,
-  Zeitparameter `now_ms` bzw. `now_us`, Tuning-Felder mit Einheit im Namen (`settleMs`,
+  Zeitparameter `now_ms` bzw. `now_us`, Tuning-Felder mit Einheit im Namen (`offAfterMs`,
   `lowDps`, `sleepAfterMs`), Abfragen nach einem Wunsch des Controllers als
   `wants...()` (`wantsSleep()`, `wantsActiveRate()`).
 
@@ -425,6 +495,7 @@ Haltung dasselbe Signal, und ein einziger Datensatz deckt beide Haltungen ab.
   bevor daraus etwas uebernommen wird.
 
 - `docs/Programmcode.md` ist die ausfuehrliche Beschreibung fuer die schriftliche Arbeit,
-  `docs/EdgeImpulse.md` die Anleitung zum Training des Modells. `README.md` ist die
+  `docs/EdgeImpulse.md` die Anleitung zum Training des Modells, `docs/Aufnehmen.md` der
+  Spickzettel fuer den Aufnahmetag (Kurzfassung derselben Schritte). `README.md` ist die
   Einstiegsseite des oeffentlichen Repositoriums und bewusst kurz — Einzelheiten gehoeren
   nach `docs/`, nicht dorthin.

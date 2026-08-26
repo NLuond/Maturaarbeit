@@ -37,7 +37,7 @@ public:
     // Jeden Takt, nicht erst im gedrosselten emit(): ein Tiefpass, der nur jedes
     // n-te Sample sieht, haette eine andere Zeitkonstante. envPeak haelt den
     // groessten Wert seit der letzten Ausgabe fest - die Schleife laeuft mit
-    // 209 Hz, die Ausgabe mit 50 Hz, ein Impuls von rund 10 ms waere sonst nur
+    // 208 Hz, die Ausgabe mit 50 Hz, ein Impuls von rund 10 ms waere sonst nur
     // zufaellig auf seinem Scheitel getroffen.
     void update(const ImuSample& s, float env, float dt) {
         if (!kEnabled) return;
@@ -103,7 +103,9 @@ private:
     // pose ist die Haltung im Automaten, dpose die des Detektors - laufen sie
     // auseinander, liegt der Fehler in der Uebergabe.
     // pose: 0 = Point, 1 = Idle, 2 = Turned.
-    // tw:   0 = Ruhe, 1 = ausgedreht, 2 = Rueckweg, 3 = Lockout, 4 = verbraucht.
+    // tw:   0 = Ruhe, 1 = dreht heraus, 2 = Ausschlag erreicht, 3 = Lockout,
+    //       4 = verbraucht. twexc ist der Ausschlag der laufenden Drehung in
+    //       Grad - der Kanal, an dem sich TWIST_ON_DEG einstellen laesst.
     //
     // nTw*: warum eine Ausdrehung nicht geschaltet hat - Erschuetterung ueber
     // TWIST_CANCEL_ENV, Arm ausserhalb LEVEL_MAX_DEG, zu spaet zurueck. nTwist
@@ -119,9 +121,11 @@ private:
         ch("pose",    (long)fsm_.pose());
         ch("dpose",   (long)pose_.pose());
         ch("tw",      twist_.state());
+        ch("twexc",   twist_.excursionDeg(), 1);
         ch("nClick",  nClick_);
         ch("nTwCan",  twist_.rejectedByCancel());
         ch("nTwLvl",  twist_.rejectedByLevel());
+        ch("nTwMov",  twist_.rejectedByMotion());
         ch("nTwSlow", twist_.rejectedByTime());
         ch("nTwist",  pinch_.blockedByTwist());
         ch("vbat",    battery_.volts(), 3);

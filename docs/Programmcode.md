@@ -32,7 +32,9 @@ src/main.cpp              Einstiegspunkt: Takt und Betriebsart-Weiche
 include/config.h          Alle Einstellwerte und Compile-Time-Schalter
 lib/<Modulname>/          Je ein Modul, header-only
 test/test_<name>/         Je ein PC-Test (laeuft ohne Hardware)
-docs/                     Diese Datei und die Anleitung zum Modelltraining
+tools/                    PC-seitige Hilfsprogramme (BLE-Bruecke fuer die Aufnahme)
+docs/                     Diese Datei, die Anleitung zum Modelltraining und der
+                          Spickzettel fuer den Aufnahmetag
 platformio.ini            Build-Konfiguration und Include-Pfade
 ```
 
@@ -58,7 +60,7 @@ void loop() {
 
     const uint32_t now_us = micros();
 
-    // Taktlaenge folgt dem Betriebszustand: AKTIV 209 Hz, BEREIT 52 Hz
+    // Taktlaenge folgt dem Betriebszustand: AKTIV 208 Hz, BEREIT 52 Hz
     const bool     active = app.wantsActiveRate();
     const uint32_t tickUs = active ? cfg::SAMPLE_INTERVAL_US : cfg::READY_INTERVAL_US;
     const float    tickDt = active ? cfg::DT                 : cfg::READY_DT;
@@ -85,12 +87,25 @@ und `cfg::READY_DT` in BEREIT (Abschnitt 9.2). Innerhalb eines Zustands ist die
 Schrittweite konstant, und der ML-Pfad läuft ausschliesslich in AKTIV, wo weiterhin exakt
 `cfg::SAMPLE_INTERVAL_US` gilt.
 
-Die Schrittweite ist dort nicht frei wählbar: `cfg::SAMPLE_INTERVAL_US = 4785 µs` entspricht
-209 Hz und ist die Abtastrate, mit der das Edge-Impulse-Modell trainiert wurde. Ein
-`static_assert` in `PinchClassifier.h` erzwingt beim Kompilieren, dass beide Zahlen
-übereinstimmen. Läuft die Firmware schneller oder langsamer, sieht der Klassifikator ein
-zeitlich gestauchtes oder gedehntes Fenster und wird still schlechter, ohne dass ein
-Fehler auftritt.
+Die Schrittweite ist dort nicht frei wählbar, sondern von **zwei** Seiten gebunden.
+Massgeblich ist der Sensor: `cfg::SAMPLE_INTERVAL_US = 4808 µs` ist exakt 1/208 s und
+damit die Zeit, in der der LSM6DS3 bei `ACCEL_ODR_HZ = 208` einen neuen Messwert
+liefert. Auf jeden Sensorwert kommt so genau ein Schleifendurchlauf.
+
+Vorher stand hier 4785 µs, also 209 Hz — die Rate, mit der das Edge-Impulse-Projekt
+hinterlegt ist. Die Schleife lief damit rund 0,5 % **schneller als der Sensor**, und
+etwa einmal pro Sekunde las sie denselben Messwert zweimal. Ein doppelter Wert ist für
+den 30-Hz-Hochpass der Hüllkurve eine Stufe mit Ableitung null, also genau in dem
+Frequenzband eine Störung, aus dem die Klickerkennung ihr Signal zieht.
+
+Die zweite Bindung ist das Modell: läuft die Firmware schneller oder langsamer als beim
+Training, sieht der Klassifikator ein zeitlich gestauchtes oder gedehntes Fenster und
+wird still schlechter, ohne dass ein Fehler auftritt. Ein `static_assert` in
+`PinchClassifier.h` hält beide Zahlen zusammen, seit dieser Änderung mit einer relativen
+Toleranz von 1 % statt ±25 µs. Die verbleibende Abweichung 208 gegen 209 Hz beträgt
+über das 40er-Fenster rund 0,9 ms auf 191 ms — weit unter der Streuung zweier Pinches
+derselben Hand. Wird das Modell einmal aus 208-Hz-Daten neu exportiert, fällt auch
+dieser Rest weg.
 
 Der Zähler `overruns` zählt verpasste Takte. Er ist im Teleplot als Kanal `ovr` sichtbar
 und im Aufnahmemodus zusätzlich an die eingebaute LED gekoppelt (Abschnitt 11). Er hat
@@ -156,7 +171,7 @@ Gerät abgedeckt.
         │
    3. env > TWIST_CANCEL_ENV ──► TwistToggle.reportShock()  (nur im Ein-Zustand)
         │
-   4. TwistToggle.tick(relTwist, twistRate, level)
+   4. TwistToggle.tick(s.gy, level)      (Ausschlag durch Integration)
         │      └── Toggle ──► fsm_.onPower()       ──┐
         │                                            │
    5. wenn eingeschaltet:                            ├──► apply()
@@ -168,7 +183,7 @@ Gerät abgedeckt.
         │           ├── scrolling() ──► ScrollWheel ──► HID-Scroll
         │           └── pointing()  ──► HID-Bewegung
         │
-   7. SleepPolicy.tick(on, gyroSum) ──► GoToSleep / Settled
+   7. SleepPolicy.tick(on, gyroSum) ──► PowerOff / GoToSleep
 ```
 
 Zwei Details in dieser Reihenfolge sind nicht beliebig:
@@ -288,13 +303,39 @@ folgt die Grenzfrequenz dem Betrag des Signals und steht bei Handzittern ausgere
 den Spitzen am weitesten offen. Wiederhergestellt und isoliert gemessen senkt der
 Geschwindigkeits-Tiefpass den Effektivwert eines simulierten 10-Hz-Tremors um
 **15.2–15.5 %**; der Spitzenwert trennt mit 10.3–10.6 % schlechter, die naheliegende
-Vermutung "der Effekt zeigt sich in den Spitzen" ist also widerlegt.
+Vermutung "der Effekt zeigt sich in den Spitzen" ist also widerlegt. Diese Messung entstand
+mit `dcutoff` auf dem Originalwert 1 Hz.
+
+Der eingestellte Wert liegt inzwischen bei **3 Hz**, und zwar wegen derselben Abweichung,
+die auch die Ableitungsstufe erspart: 1 Hz entspricht einer Zeitkonstante von 159 ms, so
+lange braucht die Geschätzung der Geschwindigkeit, um einer begonnenen Bewegung zu folgen.
+Bis dahin steht die Grenzfrequenz noch nahe `MIN_CUTOFF`, und genau das war am Gerät als
+träger Bewegungsbeginn spürbar. Die 1 Hz des Originals sind dort nötig, weil die
+Geschwindigkeit aus einem verrauschten Positionssignal differenziert wird; hier liefert sie
+das Gyroskop direkt, und die Deadzone von 3.5 °/s entfernt das Kleinzittern bereits vor dem
+Filter. Der Zweck des Tiefpasses bleibt auch bei 3 Hz erhalten — die Welligkeit eines
+10-Hz-Tremors erscheint in `|Geschwindigkeit|` bei 20 Hz und wird dort immer noch um rund
+85 % gedämpft, die Grenzfrequenz reitet also weiterhin nicht auf den Tremorspitzen.
+
+Simuliert man einen Drehratensprung auf 30 °/s bei 208 Hz durch die Filterlogik, ergibt
+sich die Anstiegszeit des Ausgangs:
+
+| `MIN_CUTOFF` / `BETA` / `DCUTOFF` | 63 % | 90 % |
+|---|---|---|
+| 1.0 / 0.20 / 1.0 | 77 ms | 135 ms |
+| 0.6 / 0.12 / 1.0 | 106 ms | 183 ms |
+| **0.6 / 0.20 / 3.0** (eingestellt) | **58 ms** | **101 ms** |
+
+Die mittlere Zeile war am Gerät als träger Bewegungsbeginn deutlich spürbar. Bemerkenswert
+ist die dritte: sie ist schneller als die erste und dämpft langsame Bewegung trotzdem
+stärker, weil die beiden Eigenschaften an verschiedenen Parametern hängen — `MIN_CUTOFF` an
+der Ruhe, `DCUTOFF` am Bewegungsbeginn.
 
 Der grössere Hebel gegen das Zittern ist allerdings `BETA`. Physiologischer Tremor liegt
 bei 8–12 Hz mit 0.1–0.5° Amplitude, also rund 12 °/s Drehrate; der Mittelwert von
 `|12·sin(2π·10t)|` ist 7.6 °/s, ob geglättet oder nicht. Mit `BETA = 0.55` ergab das eine
 mittlere Grenzfrequenz von 5.1 Hz und damit kaum Dämpfung bei 10 Hz, mit `BETA = 0.2` sind
-es 2.5 Hz.
+es 2.5 Hz (beides bei `MIN_CUTOFF = 1.0`; mit den heutigen 0.6 sind es 4.8 bzw. 2.1 Hz).
 
 ### 6.4 Zeiger — `OrientationPointer`
 
@@ -325,8 +366,20 @@ schnellere Glättung, die die Drehgeste braucht, wäre an dieser Stelle ein Rüc
 abgezogen, damit die Bewegung stetig bei null beginnt. Sie fängt den Rest-Nullpunktfehler
 ab, den die Bias-Korrektur übriglässt. Gegen das Zittern hilft sie nur begrenzt — Tremor
 liegt bei rund 12 °/s und damit weit über jeder vertretbaren Totzone. Sie weiter
-anzuheben kostet feine Bewegung direkt: 2.5 °/s entsprechen bei `SENS_X = 110` schon
-275 px/s, die stufenlos abgezogen werden.
+anzuheben kostet feine Bewegung direkt: 2.5 °/s entsprechen bei `SENS_X = 165` schon
+412 px/s, die stufenlos abgezogen werden. Mit der angehobenen Verstärkung ist sie
+umgekehrt wichtiger geworden: was sie durchlässt, wird mitverstärkt, ein von selbst
+wandernder Cursor fällt jetzt eher auf.
+
+**Verstärkung.** `SENS_X`/`SENS_Y` stehen auf 165 px/° — rund 12° Armdrehung für die volle
+Breite eines 1920 px breiten Schirms. Casiez et al. 2008 finden zu niedrige Verstärkung
+klar schädlich und zu hohe kaum, im Zweifel also eher höher. Der Wert hat eine nicht
+offensichtliche Nebenwirkung: dieselben Pixel speisen über `MotionPipeline` auch das
+Scrollrad, das sie durch `SCROLL_PX_PER_STEP` teilt. Die gemeinte Grösse ist dort ein
+*Winkel* je Radschritt, nicht eine Pixelzahl — beim Ändern von `SENS_Y` gehört
+`SCROLL_PX_PER_STEP` deshalb im selben Verhältnis mitgezogen, sonst ändert sich das
+Scrolltempo unbeabsichtigt mit dem Cursortempo. 60 px bei 165 px/° sind wie zuvor rund ein
+Drittel Grad je Schritt.
 
 **Beschleunigung.** `ACCEL_K` steht auf 0, die Kennlinie ist also linear. Sie greift
 **nach** dem Filter und multipliziert deshalb auch das Restzittern — bis zum Vierfachen.
@@ -395,9 +448,11 @@ solange die Schwerkraft eine Komponente quer zur Unterarmachse hat; deren Betrag
 `sqrt(ux²+uz²) = cos(elev)`. Bei 35° sind das noch 82 % des Signals, erst jenseits von
 rund 70° wird `atan2f(ux, uz)` wirklich schlecht konditioniert.
 
-- **eng und symmetrisch** (`LEVEL_MAX_DEG`, ±50°, `level()`): Voraussetzung der
-  Ein/Aus-Drehgeste. Dort wird geschaltet, und eine Fehlschaltung kostet mehr als eine
-  verpasste — also nur bei waagrechtem Arm, wo der Winkel am verlässlichsten ist.
+- **eng und symmetrisch** (`LEVEL_MAX_DEG`, ±30°, `level()`): Startbedingung der
+  Ein/Aus-Drehgeste, dort nur beim Anlaufen geprüft. Es beantwortet nicht mehr „ist der
+  Winkel verlässlich" (das braucht die integrierte Fassung nicht), sondern „wird die Maus
+  gerade benutzt" — und ist damit die wichtigste Bremse gegen Fehlschaltungen. Eine
+  Fehlschaltung kostet mehr als eine verpasste Geste, deshalb eng.
 - **weit und asymmetrisch** (`POSE_UP_MAX_DEG` +65°, `POSE_DOWN_MAX_DEG` −35°,
   `poseGate()`): entscheidet über `Idle`. Die beiden Richtungen bedeuten Verschiedenes —
   nach oben zeigt und scrollt man, nach unten hängt der Arm im Ruhezustand.
@@ -502,6 +557,8 @@ es pauschal 120 ms nach *jedem* Klick, was sich als "der Cursor ist kurz tot" an
 
 Das Klassifikationsmodell kommt aus Edge Impulse: 2 Klassen (`non_pinch`, `pinch`),
 5 Kanäle, Fenster 40 Werte bei 209 Hz (≈ 191 ms), Rohsignal + 1D-CNN, int8-quantisiert.
+Die 209 Hz sind die im Studio hinterlegte Rate des Modells; die Firmware taktet mit
+208 Hz, weil sie dem Sensor folgt (Abschnitt 3).
 
 Der Vorgänger arbeitete mit drei Klassen und Spectral-Analysis-Merkmalen (FFT) statt dem
 Rohfenster. Der Wechsel senkte den Flash-Bedarf von 18.1 % auf 14.4 %, weil mit den
@@ -544,10 +601,13 @@ Modell-Update wird der ganze Ordner ersetzt.
 
 ### 6.9 Ein/Aus — `TwistToggle`
 
-Ein- und Ausschalten geschieht über eine bewusste Drehung des Unterarms: gerade halten,
-um rund 90° abdrehen und binnen `maxMs` wieder zurück. Das Fenster gilt für die **ganze
-Bewegung**, gemessen ab dem Verlassen der Neutralzone — wer langsam ausdreht, hat für die
-Rückkehr entsprechend weniger Zeit.
+Ein- und Ausschalten geschieht über eine bewusste Drehung des Unterarms: zügig um rund 45°
+drehen und binnen `maxMs` wieder zurück. Das Fenster gilt für die **ganze Bewegung**, ab
+dem Beginn der Drehung — wer langsam ausdreht, hat für die Rückkehr weniger Zeit.
+
+**Gemessen wird der Ausschlag, nicht ein Winkel.** `TwistToggle` bekommt die rohe Drehrate
+`gy` und integriert sie ab dem Beginn der Bewegung. Der Ausschlag ist damit immer relativ
+zu der Haltung, in der der Unterarm gerade ruhte.
 
 Dieselbe Ausdrehung trägt **drei** Bedeutungen, unterschieden allein durch das, was danach
 passiert:
@@ -560,21 +620,26 @@ twist
      │   ╱         ╲          ╱              ╲        ╱                    ╲
  30° ├──╯───────────╰────────╯────────────────╰──────╯──────────────────────╰──
      └──────────────────────────────────────────────────────────────────────────
-        │< 1400 ms >│         │  Pinch dazwischen │    │   > 1400 ms (halten)  │
+        │< 1200 ms >│         │  Pinch dazwischen │    │   > 1200 ms (halten)  │
          EIN / AUS              RECHTSKLICK              SCROLL-MODUS
 ```
 
 | Parameter (`TwistTuning`) | Wert | Bedeutung |
 |---|---|---|
-| `onDeg` | 70° | ab hier gilt der Arm als abgedreht |
-| `backDeg` | 30° | erst hier gilt er wieder als gerade |
-| `maxMs` | 1400 ms | Fenster für die ganze Bewegung, ab Verlassen der Neutralzone |
+| `onDeg` | 45° | so weit muss die Drehung reichen — **ab der Ruhelage**, nicht absolut |
+| `backDeg` | 20° | so nah wieder an den Ausgangspunkt |
+| `outMaxMs` | 600 ms | so schnell muss der Hinweg gehen |
+| `maxMs` | 1200 ms | Fenster für die ganze Bewegung, ab Beginn der Drehung |
 | `lockoutMs` | 800 ms | Ruhe nach einem Schaltvorgang |
+| `startDps` | 60 °/s | ab hier läuft eine Drehung; die Geste startet auf dieser Flanke |
+| `armedMs` | 200 ms | so lange muss der Unterarm vorher geruht haben |
 | `stillDps` | 40 °/s | darunter gilt der Unterarm als ruhend |
 | `stillMs` | 150 ms | so lange Ruhe, bevor eine Erschütterung als Pinch zählt |
 
-Die Rückkehrschwelle (30°) ist strenger als die Haltungs-Hysterese (55°). Sonst würde ein
-halbherziges Zurückwackeln auf 54° die Maus abschalten.
+`onDeg` und die Haltungsschwelle `TURN_ON_DEG` (70°) sind **zwei verschiedene Grössen**:
+die eine ist ein Ausschlag ab der Ruhelage, die andere ein absoluter Winkel gegen die
+Schwerkraft. Ein `static_assert` hält die Geste unter der Haltungsschwelle, damit ein Flick
+aus der Zeige-Haltung nicht nebenbei in den Scroll-Modus wechselt.
 
 **Wie weit ausgedreht wird, spielt keine Rolle.** Ein tieferer Scheitelwinkel als vierte
 Bedeutung derselben Bewegung — über etwa 150° hinaus als Auslöser für das Ziehen — ist
@@ -585,14 +650,81 @@ stillschweigend zum Ziehen, und Ein/Aus verlor am Gerät messbar an Zuverlässig
 ist ein brauchbares Beispiel für die Arbeit — eine Geste kann korrekt implementiert und
 trotzdem der falsche Entwurf sein, weil sie sich eine Achse mit einer wichtigeren teilt.
 
-**Warum die Lageschätzung und nicht die integrierte Drehrate.** Der Winkel aus dem
-Madgwick-Filter ist *absolut*. Aus `gy` integriert driftete die Referenz weg, und die
-Bedingung "wieder zurück auf gerade" wäre nach einer Minute nicht mehr dieselbe wie am
-Anfang. Die Kehrseite: bei senkrecht gehaltenem Unterarm ist die Verdrehung aus der
-Schwerkraft **nicht beobachtbar**. Das enge Waagrecht-Gate ist deshalb keine
-Bequemlichkeit, sondern eine Voraussetzung der Geste — `TwistToggle` verlangt `level()`
-durchgehend, und zwar die strenge symmetrische Fassung mit ±50°, nicht das weitere und
-asymmetrische Gate der Haltung.
+**Vom absoluten Winkel zur integrierten Drehrate — eine rückgängig gemachte
+Entscheidung.** Ursprünglich las die Geste den Winkel aus dem Madgwick-Filter, mit dem
+Argument, er sei *absolut*: aus `gy` integriert driftet die Referenz weg, und "wieder
+zurück auf gerade" wäre nach einer Minute nicht mehr dieselbe Bedingung wie am Anfang. Das
+Argument ist für sich genommen richtig — und trotzdem war es die falsche Wahl.
+
+Denn der absolute Winkel bringt vier Voraussetzungen mit, und **jede einzelne lässt die
+Geste lautlos scheitern**:
+
+| Voraussetzung | Bricht, wenn |
+|---|---|
+| Schwerkraft als Bezug | der Unterarm steil steht — dann ist die Verdrehung nicht beobachtbar |
+| durchgehend geprüftes Waagrecht-Gate | die Drehung `elev` selbst mitschwenkt, weil Board-Y ≠ anatomische Drehachse |
+| fester Nullpunkt `TWIST_NEUTRAL_DEG` | die tatsächliche Ruhelage des Unterarms daneben liegt — kalibriert wird nie |
+| Einschwingzeit der Lageschätzung | direkt nach dem Aufwachen geflickt wird (β = 0.033 korrigiert nur ~2 °/s) |
+
+Am Gerät zeigte sich das als eine Geste, die "meistens, aber nicht verlässlich" ging. Drei
+aufeinanderfolgende Korrekturen an den Verwerfungspfaden brachten jeweils eine Verbesserung
+und deckten dabei die nächste Voraussetzung auf — das klassische Zeichen dafür, dass nicht
+ein Schwellwert falsch steht, sondern die **Eingangsgrösse** falsch gewählt ist.
+
+Die Integration nimmt alle vier auf einmal weg. Der Drift-Einwand entfällt dabei, weil
+**nur während der Geste integriert wird**, also höchstens `maxMs` = 1,2 s lang: 3 °/s
+Rest-Nullpunktfehler ergeben 3,6° gegen eine Schwelle von 45°. Ausserhalb der Geste wird
+gar nicht integriert, es kann sich also nichts aufsummieren.
+
+Bewusst genommen wird die **rohe** Rate `gy`, nicht die aus der Lageschätzung abgeleitete
+Rate von `TwistGuard`. Die beiden Module fragen Verschiedenes: `TwistGuard` muss die
+Verdrehung *vollständig* erfassen, weil ihr Rest sonst als Zittern im Cursor landet, und
+holt sich dafür die Lage dazu. Die Geste braucht nur den *Ausschlag*; der Schiefstand
+zwischen Unterarm- und Platinenachse kostet dort cos(Winkel), bei 15° rund drei Prozent.
+Diese drei Prozent gegen vier Totalausfälle einzutauschen war der eigentliche Fehler der
+ersten Fassung.
+
+Das Waagrecht-Gate bleibt trotzdem bestehen, aber mit **geänderter Begründung**: es ist
+keine Voraussetzung der Messung mehr, sondern nur noch ein Filter gegen Fehlauslösungen bei
+hängendem oder senkrecht erhobenem Arm.
+
+**Der Ausschlag allein trägt die Geste nicht.** Das ist die Lehre aus dem Umbau: die
+Umstellung auf den relativen Ausschlag machte die Geste *auslösbar*, nahm ihr aber die
+*Spezifität*. 70° absolut war eine unnatürliche Haltung, die im Alltag kaum vorkommt — 45°
+Unterarmdrehung ab der jeweiligen Ruhelage dagegen ständig. Am Gerät zeigte sich das
+prompt: die Maus schaltete sich immer wieder von selbst ein.
+
+Getragen wird die Geste deshalb von **zwei Bedingungen am Start**, nicht von der Amplitude:
+
+| Bedingung | Wert | Was sie ausschliesst |
+|---|---|---|
+| `level()` | ±30° | alles, was nicht mit waagrecht gehaltenem Arm passiert — hängender Arm, Greifen, Gestikulieren |
+| `armedMs` | 200 ms Ruhe davor | Drehungen, die Teil einer grösseren, durchgehenden Bewegung sind |
+
+Beide gelten **nur am Start**. Sie beantworten die Frage „war das überhaupt als Geste
+gemeint", und die stellt sich einmal. Für `level()` ist das nicht nur Vereinfachung,
+sondern notwendig: die Drehung schwenkt `elev` selbst mit, weil die Platinenachse nicht
+exakt auf der anatomischen Drehachse liegt — bei 15° Schiefstand sind das über eine
+45°-Drehung rund 11°. Ein durchgehend geprüftes enges Gate würde also ausgerechnet die
+eigene Geste abwürgen, und je enger man es stellt, desto häufiger.
+
+Damit hat `LEVEL_MAX_DEG` auch eine **neue Begründung**. Früher war es eine Voraussetzung
+der *Messung* (bei steilem Arm ist die Verdrehung aus der Schwerkraft nicht beobachtbar);
+seit der Integration ist es ein reiner *Spezifitätsfilter* und durfte deshalb von 50° auf
+30° zusammengezogen werden.
+
+Die Zähler `nTwLvl` und `nTwMov` zählen entsprechend **verhinderte Fehlauslösungen** und
+sind erwartungsgemäss gross. Sie werden erst verdächtig, wenn eine gemeinte Geste ausbleibt
+und einer von beiden dabei hochgeht.
+
+**Der kleinere Ausschlag und was ihn bezahlt.** Ab der Ruhelage gemessen genügen 45° statt
+70° — die Geste ermüdet damit spürbar weniger bei wiederholter Benutzung. Auf einem
+*uncalibrierten absoluten* Winkel wäre diese Senkung gefährlich gewesen: ruht der Unterarm
+bei 30°, läge die Auslöseschwelle nur noch 15° entfernt. Relativ gemessen sind 45° immer
+echte 45°. Bezahlt wird die kleinere Bewegung mit `outMaxMs` = 600 ms: der Hinweg muss
+zügig sein. Das trennt die Geste von einer beiläufigen Armdrehung, die denselben Winkel
+über mehrere Sekunden erreicht — eine Unterscheidung, die der grosse Ausschlag vorher
+allein über die Amplitude leistete.
 
 **Der abgesicherte Fehlermodus — und was er zunächst kaputt machte.** Verpasst der
 Klassifikator einen Pinch bei 90°, dreht der Nutzer zurück — und die Maus ginge *aus*
@@ -607,7 +739,7 @@ funktionierte**, während das Einschalten ging. Zwei Asymmetrien wirkten zusamme
    Absicherung die Einschaltgeste also gar nicht treffen.
 2. Im Aus-Zustand (BEREIT) läuft die Schleife mit 52 Hz. Der 30-Hz-Hochpass der
    Hüllkurve liegt dort an der Nyquist-Grenze und liefert praktisch nichts mehr;
-   eingeschaltet, mit 209 Hz, spricht er voll an.
+   eingeschaltet, mit 208 Hz, spricht er voll an.
 
 Die Ausdrehung erzeugt ihre Erschütterung nämlich **selbst**: am Scheitel läuft der
 Unterarm gegen seine anatomische Grenze, und dieser Anschlag hebt die Hüllkurve über
@@ -636,16 +768,22 @@ vor einem bewussten Rechtsklick liegt.
 
 | `tw` | Phase | Bedeutung |
 |---|---|---|
-| 0 | `Idle` | Unterarm in der Neutralzone |
-| 1 | `Out` | ausgedreht, Scheitel wird mitgeschrieben |
-| 2 | `Back` | Scheitel über `onDeg` erreicht, Unterarm kommt zurück |
+| 0 | `Idle` | Unterarm ruht; es wird nicht integriert |
+| 1 | `Out` | dreht heraus, Ausschlag wird mitgeschrieben (`twexc`) |
+| 2 | `Back` | `onDeg` erreicht, Unterarm kommt zurück |
 | 3 | `Lockout` | eben geschaltet, `lockoutMs` Ruhe |
-| 4 | — | Ausdrehung durch einen Pinch verbraucht |
+| 4 | — | Drehung durch einen Pinch verbraucht |
 
-`Idle → Out` zündet nur auf der **Flanke** aus der Neutralzone heraus. Ohne das heilte
-sich eine abgebrochene Geste selbst: nach einem gerissenen Waagrecht-Gate stünde der Arm
-weiterhin bei 90°, die Ausdrehung begänne im Stand einfach neu, und das Zurückdrehen
-schaltete doch. So muss der Unterarm nach jedem Abbruch erst wieder heim.
+Der Kanal `twexc` zeigt den laufenden Ausschlag in Grad. Er ist das Werkzeug, mit dem sich
+`onDeg` einstellen lässt: man sieht damit, wie weit man tatsächlich dreht, statt es zu
+schätzen.
+
+`Idle → Out` zündet nur auf der **Flanke** der Drehrate, nicht solange sie über `startDps`
+liegt. Ohne das begänne die Rückdrehung sofort eine neue Geste in der Gegenrichtung: nach
+einem Abbruch mitten in der Bewegung dreht sich der Unterarm ja weiter. Genau dieser Fall
+liess in der Testfassung zwei Prüfungen fehlschlagen — dass die Drehrate am Umkehrpunkt
+physikalisch durch null gehen *muss*, ist der Grund, warum die Flanke immer wieder
+scharf wird.
 
 Diese Geste ersetzt ein früheres Schütteln, dessen Schwelle (350 °/s) nur knapp über den
 rund 250 °/s des normalen Gebrauchs lag.
@@ -836,7 +974,7 @@ Es gibt **keine Laufzeit-Konfiguration**. Alle Betriebsarten sind `#define`s am 
 | `DEBUG_SET` | welche Kanalgruppe (`DEBUG_ALL`, `DEBUG_PINCH`, `DEBUG_POINT`, `DEBUG_ORIENT`, `DEBUG_ENV`) |
 | `USE_ML_PINCH` | ML-Klassifikator gegen reine Schwellwerterkennung |
 | `USE_BLE_HID` | BLE gegen USB |
-| `BLE_ALWAYS_ON` | Funk auch im Schlaf erreichbar; kostet Ruhestrom, macht aber jederzeit koppelbar |
+| `BLE_ALWAYS_ON` | Funk auch im Schlaf erreichbar; auf `true` wirbt das Gerät durchgehend weiter und `radioOff()` ist eine leere Hülle — Vorgabe `false`, auffindbar bleibt es über Wake-on-Motion |
 | `USE_POSE_MODE` | Haltungserkennung aus → dauerhaft `Point` |
 | `USE_ONE_EURO` | 1-Euro-Filter gegen festen Tiefpass |
 | `USE_ROLL_COMP` | Roll-Kompensation ein/aus |
@@ -915,7 +1053,7 @@ FreeRTOS-Kern für diese Zeit tatsächlich, statt nur den Aufrufer zu blockieren
 
 Die erste Fassung dieser Schleife wartete die letzte Millisekunde noch in einer leeren
 `while`-Schleife ab, mit der Begründung, die FreeRTOS-Auflösung von 1 ms sei für einen
-Takt von 4785 µs zu grob. **Diese Begründung war falsch**, und der Whole-Branch-Review hat
+Takt von 4808 µs zu grob. **Diese Begründung war falsch**, und der Whole-Branch-Review hat
 sie aufgedeckt. `micros()` ist auf diesem Kern gar keine Mikrosekunden-Uhr: `delay.h`
 liefert `dwt_enabled() ? (DWT->CYCCNT / 64) : tick2us(xTaskGetTickCount())`, und
 `dwt_enable()` wird nirgends aufgerufen — weder vom Kern, noch von `SystemInit` (das
@@ -929,7 +1067,7 @@ Diese Änderung wirkt in **jedem** Zustand, in dem das Gerät tatsächlich läuf
 BEREIT), und kostet nichts am Verhalten. Zur Kontrolle dienen zwei Teleplot-Kanäle: `ovr`
 zählt ganz verpasste Takte, und `late` gibt die tatsächliche Verspätung jedes Takts in µs
 aus. `late` ist der aussagekräftigere von beiden — `ovr` schlägt erst bei **zwei**
-verpassten Takten an (9570 µs in AKTIV, 38460 µs in BEREIT), weil `nextSample_us` beim
+verpassten Takten an (9616 µs in AKTIV, 38462 µs in BEREIT), weil `nextSample_us` beim
 Überlauftest bereits weitergestellt ist. Die Werte von `late` kommen in Stufen von rund
 977 µs statt in glatten Mikrosekunden — diese Quantisierung ist zugleich der direkte
 Messbeleg für die eben beschriebene Tick-Auflösung.
@@ -953,30 +1091,51 @@ darüber, nicht darin — der Automat weiss nichts von IMU-Rate oder Funk, das v
 
 | Zustand | Bedingung | IMU | Funk | Schleifentakt |
 |---|---|---|---|---|
-| **AKTIV** | Maus eingeschaltet | 208 Hz, Madgwick, ML | verbunden | `cfg::SAMPLE_INTERVAL_US` (209 Hz) |
+| **AKTIV** | Maus eingeschaltet | 208 Hz, Madgwick, ML | verbunden | `cfg::SAMPLE_INTERVAL_US` (208 Hz) |
 | **BEREIT** | ausgeschaltet, aber bewegt | 52 Hz, Madgwick, Drehgeste | verbunden | `cfg::READY_INTERVAL_US` (52 Hz) |
 | **SCHLAF** | 60 s ohne Bewegung | nur Beschleunigungssensor, Wake-on-Motion | aus | `loop()` suspendiert |
 
 `SleepPolicy` ist nach demselben Muster gebaut wie die übrigen Erkenner: hardwarefrei,
 ohne `config.h` und `<Arduino.h>`, ihre Parameter stehen in `SleepTuning` und sie liefert
-nur ein Ereignis (`SleepEvent::GoToSleep`/`Settled`) zurück, statt selbst etwas
+nur ein Ereignis (`SleepEvent::PowerOff`/`GoToSleep`) zurück, statt selbst etwas
 abzuschalten:
 
 ```cpp
 SleepEvent tick(bool mouseOn, float gyroSum, uint32_t now_ms) {
-    if (mouseOn || gyroSum >= t_.stillDps) tQuiet_ = now_ms;
+    if (gyroSum >= t_.stillDps) tQuiet_ = now_ms;
     ...
-    if (!wants_ && !settling_ && (now_ms - tQuiet_) >= t_.sleepAfterMs) { ... }
+    if (mouseOn) {
+        if ((now_ms - tQuiet_) < t_.offAfterMs) return SleepEvent::None;
+        tQuiet_ = now_ms;
+        return SleepEvent::PowerOff;
+    }
+    if (!wants_ && (now_ms - tQuiet_) >= t_.sleepAfterMs) { ... }
 }
 ```
 
 **Bewegung heisst hier `gyroSum` über einer Schwelle, nicht Beschleunigung.** Eine ruhig
 gehaltene, aber getragene Hand liefert konstant 1 g Erdbeschleunigung und sähe für einen
 Beschleunigungs-Schwellwert aus wie Stillstand — genau das soll aber nicht als Ruhe zählen.
-Aus demselben Grund schläft das Gerät **nur aus BEREIT ein, nie aus AKTIV**: `tick()`
-setzt den Ruhe-Zeitpunkt `tQuiet_` bereits zurück, solange `mouseOn` wahr ist, unabhängig
-von `gyroSum`. Sonst könnte die Maus mitten im Gebrauch verschwinden, während man den
-Cursor nur ruhig auf einem Ziel hält — dort ist `gyroSum` nämlich klein.
+
+Aus demselben Grund schläft das Gerät **nie direkt aus AKTIV ein**: sonst könnte die Maus
+mitten im Gebrauch verschwinden, während man den Cursor nur ruhig auf einem Ziel hält —
+dort ist `gyroSum` nämlich klein. Diese Begründung trägt aber nur über Sekunden, nicht über
+Stunden. In einer ersten Fassung setzte `tick()` den Ruhe-Zeitpunkt `tQuiet_` zurück,
+solange `mouseOn` wahr war; damit war der eingeschaltete Zustand eine Sackgasse, aus der
+das Gerät von allein nie wieder herausfand. Wer die Maus eingeschaltet ablegte, liess sie
+mit 208 Hz Takt und laufendem Funk durchlaufen, bis der Akku leer war.
+
+Jetzt folgt `tQuiet_` allein der Drehrate, und der eingeschaltete Zustand hat eine zweite,
+deutlich längere Schwelle: nach `offAfterMs` (5 min) ohne Bewegung meldet die Politik
+`PowerOff`. Der Controller schaltet daraufhin über `fsm_.onPower()` ab — derselbe Weg wie
+die Drehgeste, mit langem Brummer, zurückgesetzter Haltung und IMU auf 52 Hz. Von dort
+übernimmt die kurze Ruhezeit, und weitere 60 s später geht das Gerät schlafen.
+
+Dass `tQuiet_` beim Abschalten **neu** anläuft, ist dabei keine Kosmetik. `Haptic` schaltet
+den Motor in `trigger()` auf HIGH und erst in `update()` wieder auf LOW; ginge das Gerät im
+selben Takt schlafen, würde `update()` nie wieder aufgerufen und der Motor des langen
+Ein/Aus-Impulses liefe weiter. Die 60 s BEREIT geben ihm reichlich Takte, um fertig zu
+werden.
 
 **Das Aufwecken übernimmt die IMU selbst**, ohne dass der Mikrocontroller pollen muss. Vor
 dem Schlaf konfiguriert `ImuReader::enableWakeOnMotion()` den LSM6DS3 so, dass eine
@@ -1021,34 +1180,65 @@ kappen, dann `WAKE_UP_SRC` lesen, um die Verriegelung zu lösen. Umgekehrt könn
 Lesen und Abschalten ein neues Ereignis den Pegel erneut setzen und stehen lassen — INT1
 läge dann dauerhaft hoch, und die nächste Pegelprüfung sähe ein Ereignis, das keines ist.
 
-### 9.3 Einschwingen nach dem Aufwachen
+### 9.3 Die Lage nach dem Aufwachen
 
 Zwei Dinge sind beim Aufwachen kurzzeitig falsch, und beide hängen an derselben Ursache:
 Während des Schlafs bekommt nichts neue Samples.
 
-**Die Lageschätzung ist veraltet.** Madgwick lief zuletzt vor bis zu 60 Sekunden; die
-Ein/Aus-Drehgeste hängt aber genau an diesem Winkel und könnte danebengreifen oder von
-allein auslösen. `onWake()` setzt deshalb kurzzeitig ein stark erhöhtes Beta
-(`MADGWICK_BETA_FAST = 0.5` statt `0.033`), bis die Lage nach `settleMs` (1500 ms) wieder
-auf die Schwerkraft eingerastet ist (`SleepEvent::Settled` stellt das normale Beta
-zurück).
+**Die Lageschätzung ist veraltet.** Madgwick lief zuletzt vor bis zu 60 Sekunden, und der
+Filter startet ohnehin bei der Einheitsquaternion — also der Annahme, das Board läge flach.
+Die Ein/Aus-Drehgeste hängt über das Waagrecht-Gate an diesem Winkel und könnte
+danebengreifen oder von allein auslösen.
 
-Die 1500 ms sind eine Korrektur aus dem Whole-Branch-Review: ursprünglich standen hier
-300 ms, und die beiden Zahlen waren in verschiedenen Arbeitsschritten gewählt und nie
-miteinander multipliziert worden. Ein Beta von 0.5 rad/s entspricht rund 28,6 °/s
-Korrekturgeschwindigkeit — in 300 ms also ganze 8,6° Nachführung, während der ganze Zweck
-des Fensters ist, eine Lage einzufangen, die nach einem Schlaf mit langsamer Armdrehung
-um ein Vielfaches danebenliegen kann. 1500 ms erlauben rund 43°, und die Zeit kostet
-nichts: der Benutzer hebt in dieser Sekunde ohnehin gerade den Arm. Die sauberere Lösung
-wäre, das Quaternion direkt aus einer einzigen Beschleunigungsmessung zu setzen
-(`alignToGravity()`) — Roll und Pitch sind durch die Schwerkraft exakt bestimmt, das
-Fenster wäre dann eine Formsache und das erhöhte Beta überflüssig. Sie ist in `TODO.md`
-festgehalten, aber bewusst nicht mehr gebaut worden.
+Die erste Fassung liess den Filter dorthin *konvergieren*: `onWake()` setzte ein stark
+erhöhtes Beta (`MADGWICK_BETA_FAST = 0.5` statt `0.033`, rund 28,6 °/s Nachführung), und
+nach `settleMs` stellte `SleepEvent::Settled` das normale Beta zurück. Das Fenster musste
+mit 1500 ms grosszügig bemessen sein, um auch eine Lage einzufangen, die nach einem Schlaf
+mit langsamer Armdrehung um ein Vielfaches danebenliegt — und solange es lief, blieb
+`TwistToggle` gesperrt. Die Maus war nach dem Aufwecken also anderthalb Sekunden lang nicht
+einschaltbar.
 
-Für dieses Fenster bleibt `TwistToggle` gesperrt — nicht über einen neuen
-Mechanismus, sondern über denselben Weg, mit dem auch eine nicht-waagrechte Haltung die
-Geste verwirft: `tick()` bekommt `level = false` übergeben, solange `sleep_.settling()`
-wahr ist.
+Das war von Anfang an der Umweg. Die Schwerkraft ist keine Grösse, die man einlaufen lassen
+muss: **ein einziger Messwert des Beschleunigungssensors sagt, wo unten ist.** Er legt die
+Lage bis auf die Drehung um die Lotrechte fest, und die ist ohne Magnetometer weder
+beobachtbar noch wird sie von `upX/upY/upZ` gelesen. `MadgwickAHRS::seedFromAccel()` setzt
+die Quaternion deshalb direkt:
+
+```cpp
+// Kürzeste Drehung, die "oben" von der Z-Achse auf den gemessenen Vektor bringt.
+float q0 = 1.f + az, q1 = ay, q2 = -ax;
+```
+
+Für normierte Eingaben hat dieser Vektor die Länge `2·(1+az)`; die Drehachse ist damit nur
+bei `az = -1` unbestimmt — beim exakten Kopfstand, wo dann jede Achse quer dazu taugt.
+
+Bleibt die Frage, welchen Messwert man nimmt. Aufgeweckt wird das Gerät durch *Bewegung*,
+und während einer Bewegung misst der Sensor Schwerkraft **plus** Beschleunigung; der Vektor
+zeigt dann nicht nach unten. Der Controller löst das ohne Wartezeit: solange kein Messwert
+brauchbar aussieht, wird die Lage in **jedem** Takt neu gesetzt.
+
+```cpp
+void seedOrientation(const ImuSample& s) {
+    ahrs_.seedFromAccel(s.ax, s.ay, s.az);
+    oriented_ = fabsf(s.accMag - 1.f) <= cfg::SEED_ACC_TOL;
+}
+```
+
+Während der Bewegung ist das nur eine grobe Schätzung — aber immer noch näher an der
+Wahrheit als die Flach-Annahme, von der der Filter sonst losläuft. Und in dem Takt, in dem
+der Arm ruhig wird, rastet die Schätzung exakt ein und `oriented_` bleibt stehen. Ein
+Zeitfenster gibt es nicht mehr: die Drehgeste hängt jetzt an `oriented_`, ist also verfügbar,
+sobald ein einziger Messwert nach Schwerkraft aussieht.
+
+Damit entfallen `MADGWICK_BETA_FAST`, `SleepTuning::settleMs`, `SleepEvent::Settled` und
+`SleepPolicy::settling()` ersatzlos — ein ganzer Mechanismus, der nur existierte, weil die
+Lage eingeschwungen statt gesetzt wurde.
+
+Die Quaternion-Konvention ist dabei die Stelle, an der man sich lautlos vertut: ein
+Vorzeichenfehler ergibt eine plausibel aussehende, aber gespiegelte Lage. `test_madgwick_seed`
+prüft deshalb alle sechs Achsenlagen einzeln gegen `upX/upY/upZ`, dazu eine schräge, den
+Nullvektor und die Zusicherung, dass der gesetzte Wert unter dem laufenden Filter stehen
+bleibt.
 
 **Der Schleifentakt liegt beliebig weit in der Vergangenheit.** `nextSample_us` wurde vor
 dem Schlaf zuletzt gesetzt; ohne Korrektur müsste die Schleife nach dem Aufwachen erst
@@ -1118,11 +1308,12 @@ Sekunden:
 | `test_one_euro` | 1-Euro-Filter | `-I lib/Filters` |
 | `test_pinch_features` | Kanalbelegung des Modells | `-I lib/ImuReader -I lib/PinchFeatures` |
 | `test_sleep_policy` | Schlaf-Entscheidung | `-I lib/SleepPolicy` |
+| `test_madgwick_seed` | Lage aus der Schwerkraft setzen | `-I lib/MadgwickAHRS` |
 
 Alle auf einmal:
 
 ```powershell
-pio test -e native        # erwartet: "11 test cases: 11 succeeded"
+pio test -e native        # erwartet: "12 test cases: 12 succeeded"
 ```
 
 Einzeln, ohne PlatformIO — die Zeile dafür steht im Kopf jeder Testdatei:
@@ -1142,7 +1333,7 @@ an PlatformIO gebundene Fassung derselben Prüfungen. Für `pio test` übersetzt
 eigener Runner (`test/test_custom_runner.py`, `test_framework = custom`) die Ausgabe in
 PlatformIO-Testfälle.
 
-Alle zehn hängen daran, dass der jeweilige Header **hardwarefrei** bleibt. Das ist keine
+Alle elf hängen daran, dass der jeweilige Header **hardwarefrei** bleibt. Das ist keine
 Nebenbedingung, sondern der Grund für den Zuschnitt der Module. Fällt ein `#include
 <Arduino.h>` hinein, ist der Test weg — und die `-I`-Liste in `[env:native]` bricht den
 Build, was genau die Absicht ist.
@@ -1160,34 +1351,147 @@ jetzt in `PoseTuning`/`PinchTuning`/`ScrollTuning` (Abschnitt 8). Damit hat **je
 mit Entscheidungslogik einen Test.**
 
 Nicht auf dem PC prüfbar bleiben die Treiber und der Zusammenbau: `ImuReader`, `MouseHID`,
-`Haptic`, `Battery`, `PinchClassifier` (Hardware bzw. Edge-Impulse-SDK) und
+`CollectLink`, `Haptic`, `Battery`, `PinchClassifier` (Hardware bzw. Edge-Impulse-SDK) und
 `AirMouseController` selbst, der gerade die Verdrahtung aller anderen ist. Diese werden
 über Kompilieren und Messen am Gerät verifiziert.
+
+Die PC-seitige BLE-Brücke (Abschnitt 11) folgt demselben Muster mit anderen Mitteln. Ihr
+heikler Teil ist nicht das Funken, sondern das Zusammensetzen der Zeilen aus BLE-Brocken
+und die Lückenerkennung — beides reine Bytelogik. Sie hat deshalb einen eingebauten
+Selbsttest im selben Ausgabeformat wie die C++-Tests, der ohne Gerät, ohne COM-Port und
+ohne die BLE-Bibliothek läuft:
+
+```powershell
+py tools/ble_collect_bridge.py --selftest      # erwartet: "... Pruefungen, 0 Fehler"
+```
+
+Er prüft unter anderem den Fall, der die Brücke im Betrieb einmal zum Einfrieren gebracht
+hat: dass ein COM-Port, der nichts annimmt, den Aufrufer **nicht** aufhält.
 
 ---
 
 ## 11. Datenaufnahme für das Modell
 
 Mit `COLLECT_MODE true` gibt `main.cpp` statt HID-Bewegungen nur CSV aus — fünf Werte pro
-Zeile, in der Reihenfolge aus `feat::pack()`, mit `edge-impulse-data-forwarder`
-eingelesen.
+Zeile, in der Reihenfolge aus `feat::pack()`. **Wohin die Zeile geht, entscheidet
+`CollectLink`** (`lib/CollectLink/`): über USB-Serial oder, mit `COLLECT_OVER_BLE`, über
+den Nordic UART Service. Zwei Zweige hinter einer gemeinsamen Schnittstelle, wie bei
+`MouseHID`, von `static_assert`s zusammengehalten. Das Zahlenformat ist in beiden Zweigen
+dasselbe, damit Aufnahmen über Kabel und über Funk im selben Datensatz liegen dürfen.
 
-Zwei Vorkehrungen sichern die Aufnahme ab:
+### Warum kabellos
+
+Am USB-Kabel zieht jede Armbewegung. Für `idle` und `negative` ist das gleichgültig, für
+`pinch` nicht: das sind genau die Aufnahmen, in denen der Arm ruhig gehalten wird, und ein
+Kabelzug erzeugt dort dieselbe Art kurzer Erschütterung, die das Modell lernen soll. Der
+Datensatz bekäme eine Störgrösse, die es am fertigen Gerät nicht gibt.
+
+### Warum eine Brücke auf dem PC
+
+`edge-impulse-data-forwarder` öffnet ausschliesslich einen **echten** COM-Port — er benutzt
+Node-`serialport`, kennt also weder TCP noch Named Pipes — und BLE erscheint unter Windows
+nicht als COM-Port. Dazwischen steht deshalb `tools/ble_collect_bridge.py`: sie liest den
+Nordic UART Service und schreibt in ein virtuelles COM-Paar (com0com), aus dessen anderem
+Ende der Forwarder liest. Für ihn sieht das aus wie ein serielles Gerät; der Ablauf im
+Studio bleibt unverändert.
+
+Gesucht wird das Gerät über die **UUID** des Dienstes, nicht über den Namen. Das ist kein
+Detail: die HID-Firmware wirbt unter demselben `BLE_NAME`, und im Werbepaket steht ohnehin
+kein Name — er sitzt in der Scan Response, weil die 128-Bit-UUID allein schon 18 der 31
+Bytes belegt.
+
+### Zwei Vorkehrungen der Aufnahme
 
 **Die LED warnt vor gedehnten Fenstern.** Verpasst die Schleife während der Aufnahme einen
-Abtastschritt — etwa weil der USB-Puffer volläuft —, ist das Fenster zeitlich gedehnt und
-der Datensatz unbrauchbar, ohne dass man es der CSV ansieht. Eine Textmeldung würde den
-Datenstrom stören, also geht die Meldung auf die eingebaute LED und bleibt bis zum Reset
-an. Leuchtet sie nach der Aufnahme, wird verworfen. (`LED_BUILTIN` ist beim XIAO aktiv
-LOW: `digitalWrite(…, LOW)` schaltet ein.)
+Abtastschritt, ist das Fenster zeitlich gedehnt und der Datensatz unbrauchbar, ohne dass
+man es der CSV ansieht. Eine Textmeldung würde den Datenstrom stören, also geht die Meldung
+auf die eingebaute LED und bleibt bis zum Reset an. Über Funk kommt ein zweiter Grund dazu:
+eine Zeile, die der Sendeweg nicht angenommen hat. (`LED_BUILTIN` ist beim XIAO aktiv LOW.)
 
 **Der Hüllkurven-Kanal behält vier Nachkommastellen**, die übrigen vier nur drei. `env`
 bewegt sich zwischen 0.005 und 0.125, und die Schwelle `ENV_ON = 0.035` liegt genau dort —
 bei drei Stellen bliebe am unteren Ende eine einzige signifikante Ziffer. Die anderen
-Kanäle liegen unter der Sensorauflösung; die eingesparten Bytes senken die Serial-Last um
-rund ein Fünftel.
+Kanäle liegen unter der Sensorauflösung; die eingesparten Bytes senken die Last auf dem
+Sendeweg um rund ein Fünftel, was über Funk mehr zählt als über USB.
 
-Das vollständige Aufnahmeprotokoll steht in `TODO.md`.
+### Der Zähler vor jeder Zeile
+
+Über Funk trägt jede Zeile zusätzlich einen 16-Bit-Zähler. Er ist das Gegenstück zur LED
+für den Weg *nach* dem Gerät: geht ein BLE-Brocken verloren, fehlen Samples, und dem CSV
+sieht man auch das nicht an. Die Brücke prüft die Lückenlosigkeit und streift den Zähler
+wieder ab.
+
+Sie **bricht dabei nicht ab**, sondern meldet Uhrzeit und Zahl der fehlenden Samples und
+läuft weiter. Der erste Entwurf brach ab, und das war falsch herum gedacht: eine Lücke
+macht nicht die Sitzung unbrauchbar, sondern die Aufnahme, die gerade lief. Ein Abbruch
+kostet dagegen alles, was danach noch aufgenommen worden wäre. Die Uhrzeit in der Meldung
+ist das, was man wirklich braucht — sie sagt, welche Aufnahme zu wiederholen ist. Am Ende
+der Sitzung steht eine Bilanz mit Anteil der fehlenden Samples.
+
+Der Zähler läuft **auch ohne Verbindung** weiter. Sonst wäre ein Verbindungsabbruch mitten
+in der Aufnahme unsichtbar: die Zeilen davor und danach wären lückenlos durchnummeriert,
+obwohl Sekunden fehlen.
+
+### Was die Messung der Funkstrecke ergab
+
+Erforderlich sind rund 8 kB/s (208 Zeilen zu ~38 Bytes). Eine Messung über 25 Sekunden
+zeigte, dass das zunächst nicht hielt:
+
+| | erste Messung | nach der Korrektur |
+|---|---|---|
+| Zeilen je Sekunde | 171 | **208** |
+| zerrissene Zeilen | 930 | **0** |
+| Lücken | ständig | **keine** |
+
+Der Hinweis lag in den Paketgrössen: neben 744 vollen Paketen zu 244 Bytes kamen rund 500
+**Kleinpakete zu 23–29 Bytes** an. Die Ursache steht im Kern der Bluefruit-Bibliothek.
+`BLEUart::bufferTXD()` legt den Sendepuffer mit **genau einer MTU** an — 247 Bytes, rund
+sechs Zeilen — und leert ihn selbst, sobald 244 Bytes darin stehen. Er ist dadurch dauernd
+fast voll: die nächste Zeile passt nur noch teilweise hinein, der Rest fährt als eigenes
+Kleinpaket, und scheitert dieses, kommt beim Empfänger eine **halbe Zeile** an. Jeder Rest
+verbrennt zusätzlich einen Sendeplatz, weshalb die Strecke nur rund 6,5 statt möglicher
+12 kB/s trug.
+
+Dazu kommt eine zweite Wirkung: `notify()` wartet über ein Semaphor auf einen freien
+Sendeplatz und hält dabei die 208-Hz-Schleife an. Ein blockierter Sendeaufruf äussert sich
+deshalb nicht als Lücke, sondern als **verpasster Takt** — niedrigere Rate bei lückenlosem
+Zähler. Die beiden Fehlerbilder auseinanderzuhalten ist der eigentliche Nutzen des Zählers.
+
+`CollectLink` legt den Sendepuffer deshalb selbst an, mit **2048 statt 247 Bytes**. Damit
+passt jede Zeile am Stück hinein, die Kleinpakete entfallen, und jedes Paket fährt voll.
+
+### Der Rest der letzten Sitzung
+
+Ein zweiter Befund kam erst mit dem grösseren Puffer zum Vorschein: beim Trennen bleibt sein
+Inhalt stehen und fährt beim nächsten Verbinden als erstes hinaus — Zeilen mit
+Zählerwerten der **vorigen** Sitzung. Gemessen waren es fünf Zeilen, gefolgt von einem
+Sprung von 8566. Die Brücke meldete das als Lücke, gleich in der ersten Sekunde jeder Sitzung.
+
+`CollectLink` räumt den Puffer deshalb auf der **Flanke** von "nicht verbunden" nach
+"verbunden", nicht im Zustand: geräumt wird einmal je Sitzung, sonst wäre der eben
+geschriebene Inhalt in jedem Takt wieder weg.
+
+### Warum die Brücke einen eigenen Schreib-Faden hat
+
+com0com blockiert `write()`, solange niemand das andere Ende des Paars liest — und das tut
+der Forwarder erst, wenn er gestartet ist. Direkt aus dem BLE-Rückruf geschrieben friert das
+die ganze Ereignisschleife ein: keine Statusausgabe mehr, und die Benachrichtigungen stauen
+sich unsichtbar im Speicher. Das Schreiben läuft deshalb in einem eigenen Faden mit
+begrenzter Warteschlange; was nicht hineinpasst, wird **verworfen und gezählt**, statt
+alles anzuhalten. Die Anzeige `verworfen` steigt so lange, bis der Forwarder liest — und
+ist danach die dritte Kontrolle neben Rate und Lücken.
+
+### Die Frequenz wird vorgegeben
+
+Der Forwarder schätzt die Abtastrate sonst aus dem Datenstrom. Über BLE kommen die Zeilen
+in Schüben alle ~8 ms an, die Schätzung schwankt entsprechend, und ein im Studio
+hinterlegtes 205 oder 211 Hz wäre derselbe Fehler wie die 209 Hz des ersten Datensatzes.
+Die wahre Rate ist eine Konstante der Firmware, keine Messgrösse, also wird sie mit
+`--frequency 208` gesetzt. Die Kontrolle wandert damit zur Brücke: ihr Mittelwert bei
+`Zeilen/s` muss ~208 sein.
+
+Die Mengen je Klasse und der Vergleich eigener gegen gemischten Datensatz stehen in
+[EdgeImpulse.md](EdgeImpulse.md), der Ablauf am Aufnahmetag in [Aufnehmen.md](Aufnehmen.md).
 
 ---
 
@@ -1216,7 +1520,11 @@ wurde früher beim Einschalten kalibriert — also direkt nach der Einschaltgest
 Lageschätzung am stärksten gestört ist. Jedes Einschalten ergab einen anderen Bezug und
 alle aufgezeichneten Werte waren untereinander unvergleichbar. Er ist jetzt fest
 (`TWIST_NEUTRAL_DEG`): das Board sitzt immer gleich am Arm, der Nullpunkt ist eine
-Eigenschaft der Bauform und keine der einzelnen Sitzung.
+Eigenschaft der Bauform und keine der einzelnen Sitzung. Die **Geste** braucht seit dem
+Umbau auf den integrierten Ausschlag überhaupt keinen Nullpunkt mehr — sie misst gegen die
+Haltung, in der der Unterarm gerade ruhte. Übrig bleibt der feste Bezug nur für die
+Haltungserkennung, wo er ohnehin nur zwischen zwei weit auseinanderliegenden Zonen
+unterscheiden muss.
 
 **Verworfenes bleibt begründet stehen — aber nicht im Code.** Ausgebaute Ansätze (das
 Ziehen, das Schütteln, der Scroll-Joystick, die Einschalt-Kalibrierung) sind in diesem

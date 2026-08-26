@@ -33,16 +33,27 @@ constexpr PinchTuning  kPinchDefaults{};
 constexpr ScrollTuning kScrollDefaults{};
 constexpr MotionTuning kMotionDefaults{};
 
-static_assert(kTwistDefaults.onDeg     == cfg::TURN_ON_DEG      &&
+static_assert(kTwistDefaults.onDeg     == cfg::TWIST_ON_DEG     &&
               kTwistDefaults.backDeg   == cfg::TWIST_BACK_DEG   &&
+              kTwistDefaults.outMaxMs  == cfg::TWIST_OUT_MAX_MS &&
               kTwistDefaults.maxMs     == cfg::TWIST_MAX_MS     &&
               kTwistDefaults.lockoutMs == cfg::TWIST_LOCKOUT_MS &&
+              kTwistDefaults.startDps  == cfg::TWIST_START_DPS  &&
+              kTwistDefaults.armedMs   == cfg::TWIST_ARMED_MS   &&
               kTwistDefaults.stillDps  == cfg::TWIST_STILL_DPS  &&
-              kTwistDefaults.stillMs   == cfg::TWIST_STILL_MS,
+              kTwistDefaults.stillMs   == cfg::TWIST_STILL_MS   &&
+              kTwistDefaults.rateTau   == cfg::TWIST_RATE_TAU,
               "TwistTuning und die cfg::-Werte der Ein/Aus-Geste sind auseinandergelaufen");
-static_assert(kTwistDefaults.backDeg < cfg::TURN_OFF_DEG &&
-              cfg::TURN_OFF_DEG < cfg::TURN_ON_DEG,
-              "Reihenfolge backDeg < TURN_OFF_DEG < TURN_ON_DEG verletzt");
+static_assert(cfg::TWIST_BACK_DEG < cfg::TWIST_ON_DEG,
+              "Die Rueckkehrschwelle der Geste liegt ueber ihrem Ausschlag");
+static_assert(cfg::TURN_OFF_DEG < cfg::TURN_ON_DEG,
+              "Hysterese der Haltung verkehrt herum");
+
+// Der Ausschlag der Geste ist RELATIV zur Ruhelage, die Haltungsschwelle
+// absolut - zwei verschiedene Groessen. Bleibt die Geste unter der Haltung,
+// wechselt ein Flick aus der Zeige-Haltung nicht nebenbei in den Scroll-Modus.
+static_assert(cfg::TWIST_ON_DEG < cfg::TURN_ON_DEG,
+              "Die Geste reicht so weit, dass sie die Haltung mitzieht");
 
 // Die Geste erschuettert das Board selbst; ihre Drehrate muss den Klick also
 // sperren, bevor sie unter der Schwelle liegt, ab der eine Erschuetterung als
@@ -120,10 +131,10 @@ public:
         telemetry_.update(s, env, dt);
         updateAngles(s, dt);
         // scrolling() stammt aus dem Vortakt (onPose() laeuft erst danach); bei
-        // 209 Hz ist der eine Takt Verzug ohne Belang.
+        // 208 Hz ist der eine Takt Verzug ohne Belang.
         pose_.update(twist_, elev_, s.gyroSum, dt, now_ms, fsm_.scrolling());
 
-        handleTwistGesture(env, now_ms);
+        handleTwistGesture(s, env, dt, now_ms);
 
         if (fsm_.on()) {
             // Haltung vor Pinch: sie entscheidet, welche Taste er ausloest.
@@ -148,7 +159,7 @@ public:
         // Aufgewacht heisst BEREIT, nicht AKTIV: die Einschalt-Geste kommt erst.
         setImuRate();
         mouse_.radioOn();
-        ahrs_.setBeta(cfg::MADGWICK_BETA_FAST);
+        oriented_ = false;         // Lage aus der Schwerkraft neu setzen
         sleep_.wake(now_ms);
     }
 
@@ -182,11 +193,13 @@ private:
     float    twist_ = 0.f, elev_ = 0.f;
     float    twistGain_ = 1.f;
     bool     imuRateActive_ = false;   // Startzustand ausgeschaltet, also BEREIT
+    bool     oriented_      = false;   // Lage aus der Schwerkraft uebernommen
 
     // --- Lage -----------------------------------------------------------
 
     // Einmal pro Takt ableiten und ueberall dasselbe benutzen.
     void updateAngles(const ImuSample& s, float dt) {
+        if (!oriented_) seedOrientation(s);
         ahrs_.update(s.gx, s.gy, s.gz, s.ax, s.ay, s.az, dt);
         twist_ = arm::twistDeg(ahrs_.upX(), ahrs_.upZ());
         elev_  = arm::elevDeg(ahrs_.upX(), ahrs_.upY(), ahrs_.upZ()) * cfg::ELEV_SIGN;
@@ -195,9 +208,19 @@ private:
         twistGain_ = twistGuard_.update(twist_, dt);
     }
 
+    // Wo unten ist, steht in einem einzigen Messwert - solange dieser nach
+    // reiner Schwerkraft aussieht. Waehrend einer Bewegung tut er das nicht,
+    // deshalb wird bis dahin jeden Takt neu gesetzt: eine grobe Schaetzung,
+    // die in dem Takt exakt einrastet, in dem der Arm ruhig wird. Kein
+    // Einschwingfenster, kein erhoehtes Beta.
+    void seedOrientation(const ImuSample& s) {
+        ahrs_.seedFromAccel(s.ax, s.ay, s.az);
+        oriented_ = fabsf(s.accMag - 1.f) <= cfg::SEED_ACC_TOL;
+    }
+
     // --- Ereignisse -----------------------------------------------------
 
-    void handleTwistGesture(float env, uint32_t now_ms) {
+    void handleTwistGesture(const ImuSample& s, float env, float dt, uint32_t now_ms) {
         // Nur melden, nicht selbst verwerfen: ob die Erschuetterung ein Pinch
         // war, entscheidet TwistToggle an der eigenen Drehrate - die Geste
         // erschuettert das Board am Scheitel selbst. An der Schwelle und nicht
@@ -205,13 +228,19 @@ private:
         // abschaltet.
         if (fsm_.on() && env > cfg::TWIST_CANCEL_ENV) twistToggle_.reportShock(now_ms);
 
-        // Der rohe Winkel, nicht der geglaettete: ein Tiefpass verzoegert eine
-        // Rampe um seine Zeitkonstante, und die Geste scheiterte damit
-        // ausgerechnet bei zuegiger Ausfuehrung. settling(): nach dem Aufwachen
-        // ist der Winkel noch nicht verlaesslich.
-        const bool levelOk = pose_.level() && !sleep_.settling();
-        const float relRaw = arm::relDeg(twist_, cfg::TWIST_NEUTRAL_DEG);
-        switch (twistToggle_.tick(relRaw, twistGuard_.rateDps(), levelOk, now_ms)) {
+        // Die ROHE Drehrate, kein Winkel aus der Lageschaetzung: der Ausschlag
+        // entsteht durch Integration ab dem Beginn der Bewegung und ist damit
+        // von Ruhelage, Schwerkraft und Einschwingzeit unabhaengig.
+        //
+        // Bewusst nicht twistGuard_.rateDps(): jene Rate soll die Verdrehung
+        // vollstaendig erfassen und holt sich dafuer die Lage dazu, hier zaehlt
+        // nur der Ausschlag. Der Schiefstand zwischen Unterarm- und
+        // Platinenachse kostet cos(Winkel), bei 15 Grad rund drei Prozent.
+        //
+        // level(): der Arm soll waagrecht bleiben. oriented_: vor dem ersten
+        // brauchbaren Schwerkraft-Messwert ist die Haltung nicht verlaesslich.
+        const bool levelOk = pose_.level() && oriented_;
+        switch (twistToggle_.tick(s.gy, levelOk, dt, now_ms)) {
             case TwistEvent::Toggle: apply(fsm_.onPower(), now_ms); break;
             case TwistEvent::None:   break;
         }
@@ -301,8 +330,11 @@ private:
 
     void handleSleep(float gyroSum, uint32_t now_ms) {
         switch (sleep_.tick(fsm_.on(), gyroSum, now_ms)) {
+            // Denselben Weg wie die Drehgeste: langer Brummer, Haltung und
+            // Zeiger zurueck, IMU auf die Ruhe-Rate. Danach uebernimmt in
+            // BEREIT die kurze Ruhezeit bis GoToSleep.
+            case SleepEvent::PowerOff:  if (fsm_.on()) apply(fsm_.onPower(), now_ms); break;
             case SleepEvent::GoToSleep: prepareSleep(); break;
-            case SleepEvent::Settled:   ahrs_.setBeta(cfg::MADGWICK_BETA); break;
             case SleepEvent::None:      break;
         }
     }

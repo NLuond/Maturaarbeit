@@ -702,19 +702,18 @@ danach:**
   4 194 304 000 ms, also nach rund 48.5 Tagen, zurück. Für dieses Gerät
   irrelevant, aber der Vollständigkeit halber notiert.)
 
-- **`MadgwickAHRS::alignToGravity(ax, ay, az)` — die bessere Antwort auf das
-  Einschwingfenster, bewusst noch nicht gebaut.** `SleepTuning::settleMs` steht
-  jetzt auf 1500 ms statt 300, weil `MADGWICK_BETA_FAST` = 0.5 rad/s ≈ 28.6 °/s
-  entspricht: 300 ms erlaubten nur rund 8.6° Nachführung, 1.5 s erlauben rund
-  43°. Das ist die konservative Lösung, nicht die saubere.
+- **~~`MadgwickAHRS::alignToGravity()`~~ — gebaut, heisst `seedFromAccel()`.**
+  Erledigt. Die Lage wird beim Start und nach jedem Aufwachen direkt aus einem
+  Messwert des Beschleunigungssensors gesetzt, statt dorthin zu konvergieren.
+  Solange kein Messwert nach reiner Schwerkraft aussieht
+  (`|accMag - 1 g| > cfg::SEED_ACC_TOL`), wird jeden Takt neu gesetzt; in dem
+  Takt, in dem der Arm ruhig wird, rastet die Schaetzung ein.
 
-  Sauber wäre, das Quaternion nach dem Aufwachen **direkt aus einer einzigen
-  Beschleunigungsmessung zu setzen**: Roll und Pitch sind durch die
-  Erdbeschleunigung exakt bestimmt, es gibt nichts einzuschwingen. Das Fenster
-  wäre danach eine Formsache und das erhöhte Beta überflüssig — man spart sich
-  zwei gekoppelte Zahlen, die niemand miteinander multipliziert hat. Für die
-  Arbeit ist das einen Absatz wert: es zeigt den Unterschied zwischen „Parameter
-  so lange vergrössern, bis es reicht" und „das Problem an der Wurzel lösen".
+  Damit sind `MADGWICK_BETA_FAST`, `SleepTuning::settleMs`, `SleepEvent::Settled`
+  und `SleepPolicy::settling()` ersatzlos entfallen — genau die zwei gekoppelten
+  Zahlen, die niemand miteinander multipliziert hatte. Die Drehgeste haengt jetzt
+  an `oriented_` statt an einem Zeitfenster und ist nach dem Aufwachen sofort da.
+  Geprueft von `test_madgwick_seed` (alle sechs Achsenlagen).
 
-  **Abnahmetest** für den am Ende benutzten Wert ist in beiden Fällen Schritt 5
-  des Messplans Stromsparen (`rtwist` unmittelbar nach dem Wecken).
+  **Offen bleibt der Abnahmetest am Geraet**: Schritt 5 des Messplans Stromsparen,
+  `rtwist` unmittelbar nach dem Wecken.

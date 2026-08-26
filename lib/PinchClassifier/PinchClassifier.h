@@ -15,8 +15,14 @@
 
 // Das Modell wurde auf einer festen Abtastrate trainiert: laeuft die Schleife
 // anders, sieht der Klassifikator ein zeitlich verzerrtes Fenster.
-static_assert(cfg::SAMPLE_INTERVAL_US > EI_CLASSIFIER_INTERVAL_MS * 1000.0 - 25.0 &&
-              cfg::SAMPLE_INTERVAL_US < EI_CLASSIFIER_INTERVAL_MS * 1000.0 + 25.0,
+//
+// Ein Prozent Toleranz und keine feste Mikrosekundenzahl, weil zwei Raten
+// aufeinandertreffen: der Takt folgt dem SENSOR (208 Hz), das Studio-Projekt
+// ist mit 209 Hz hinterlegt. Ueber das 40er-Fenster sind das rund 0.9 ms
+// Dehnung auf 191 ms - weit unter der Streuung zweier Pinches derselben Hand.
+// Wird das Modell einmal mit 208 Hz neu exportiert, passt es exakt.
+static_assert(cfg::SAMPLE_INTERVAL_US > EI_CLASSIFIER_INTERVAL_MS * 990.0 &&
+              cfg::SAMPLE_INTERVAL_US < EI_CLASSIFIER_INTERVAL_MS * 1010.0,
               "cfg::SAMPLE_INTERVAL_US passt nicht zur Abtastrate des Modells");
 
 static_assert(EI_CLASSIFIER_RAW_SAMPLES_PER_FRAME == feat::CHANNELS,
@@ -47,6 +53,11 @@ public:
         const uint32_t t0 = micros();
         err_ = run_classifier(&signal, &result, false);
         lastUs_ = micros() - t0;
+        // Das SDK stoppt beide Teile selbst. lastUs_ ist verstrichene Uhrzeit
+        // und enthaelt Unterbrechungen durch hoeher priorisierte Aufgaben,
+        // diese beiden nicht.
+        dspUs_ = (uint32_t)result.timing.dsp_us;
+        nnUs_  = (uint32_t)result.timing.classification_us;
         if (err_ != EI_IMPULSE_OK) { score_ = 0.f; return false; }
 
         score_ = 0.f;
@@ -64,6 +75,10 @@ public:
     int      error()  const { return (int)err_; }
     uint32_t lastUs() const { return lastUs_; }
 
+    // Aufteilung derselben Inferenz auf Vorverarbeitung und Netz.
+    uint32_t lastDspUs() const { return dspUs_; }
+    uint32_t lastNnUs()  const { return nnUs_;  }
+
 private:
     static constexpr int FRAME_SIZE = EI_CLASSIFIER_DSP_INPUT_FRAME_SIZE;
 
@@ -77,6 +92,8 @@ private:
 
     float            score_  = 0.f;
     uint32_t         lastUs_ = 0;
+    uint32_t         dspUs_  = 0;
+    uint32_t         nnUs_   = 0;
     EI_IMPULSE_ERROR err_    = EI_IMPULSE_OK;
 
     // Der Ringpuffer beginnt beim aeltesten Wert; das SDK erwartet das Fenster
@@ -100,6 +117,8 @@ public:
     float    score()   const { return 0.f; }
     int      error()   const { return 0; }
     uint32_t lastUs()  const { return 0; }
+    uint32_t lastDspUs() const { return 0; }
+    uint32_t lastNnUs()  const { return 0; }
 };
 
 #endif

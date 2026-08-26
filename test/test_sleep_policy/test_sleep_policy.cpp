@@ -31,6 +31,19 @@ static SleepEvent run(SleepPolicy& p, bool mouseOn, float gyroSum,
     return seen;
 }
 
+// Wie run(), meldet aber, ob ein bestimmtes Ereignis dabei war: seit dem
+// Auto-Aus koennen in einem Fenster zwei verschiedene auftreten, und run()
+// liefert nur das zuletzt gesehene.
+static bool saw(SleepPolicy& p, bool mouseOn, float gyroSum,
+                uint32_t& now, uint32_t ms, SleepEvent want) {
+    bool found = false;
+    for (uint32_t i = 0; i < ms; i += 10) {
+        if (p.tick(mouseOn, gyroSum, now) == want) found = true;
+        now += 10;
+    }
+    return found;
+}
+
 static void test_sleepsAfterQuietTime() {
     SleepPolicy p;
     uint32_t now = 1000;
@@ -40,14 +53,53 @@ static void test_sleepsAfterQuietTime() {
           "schlaeft nicht nach 60 s Ruhe");
 }
 
-// Die wichtigste Eigenschaft: waehrend die Maus benutzt wird, darf sie nicht
-// verschwinden - auch nicht, wenn man den Cursor minutenlang ruhig auf einem
-// Ziel haelt.
+// Die wichtigste Eigenschaft: aus dem eingeschalteten Zustand wird nie direkt
+// geschlafen - auch nicht, wenn man den Cursor minutenlang ruhig auf einem Ziel
+// haelt. Der Weg fuehrt immer ueber PowerOff und damit ueber BEREIT.
 static void test_neverSleepsWhileMouseOn() {
     SleepPolicy p;
     uint32_t now = 1000;
-    CHECK(run(p, true, 0.f, now, 300000) == SleepEvent::None,
+    CHECK(!saw(p, true, 0.f, now, 600000, SleepEvent::GoToSleep),
           "schlaeft ein, obwohl die Maus eingeschaltet ist");
+}
+
+// Wer die Maus eingeschaltet ablegt, soll sie nicht die ganze Nacht mit vollem
+// Takt und Funk laufen lassen.
+static void test_switchesOffAfterLongStillness() {
+    SleepPolicy p;
+    uint32_t now = 1000;
+    CHECK(!saw(p, true, 0.f, now, 240000, SleepEvent::PowerOff),
+          "schaltet schon vor offAfterMs ab");
+    CHECK(saw(p, true, 0.f, now, 70000, SleepEvent::PowerOff),
+          "schaltet nach 5 min Ruhe nicht ab");
+}
+
+static void test_motionKeepsItOn() {
+    SleepPolicy p;
+    uint32_t now = 1000;
+    CHECK(!saw(p, true, 200.f, now, 600000, SleepEvent::PowerOff),
+          "schaltet trotz Bewegung ab");
+}
+
+// Nach dem Abschalten laeuft die Ruhezeit neu an. Ohne das ginge das Geraet im
+// selben Takt schlafen, und Haptic::update() wuerde nie wieder aufgerufen - der
+// Motor des langen Ein/Aus-Impulses bliebe an.
+static void test_sleepFollowsPowerOffWithDelay() {
+    SleepPolicy p;
+    uint32_t now = 1000;
+    run(p, true, 0.f, now, 301000);   // PowerOff bei 300000, danach noch 1 s
+    CHECK(!saw(p, false, 0.f, now, 50000, SleepEvent::GoToSleep),
+          "schlaeft sofort nach dem Abschalten, der Haptik-Impuls bricht ab");
+    CHECK(saw(p, false, 0.f, now, 15000, SleepEvent::GoToSleep),
+          "schlaeft nach dem Abschalten gar nicht mehr");
+}
+
+static void test_powerOffComesOnce() {
+    SleepPolicy p;
+    uint32_t now = 1000;
+    CHECK(saw(p, true, 0.f, now, 310000, SleepEvent::PowerOff), "kein PowerOff");
+    CHECK(!saw(p, true, 0.f, now, 240000, SleepEvent::PowerOff),
+          "PowerOff wiederholt sich vor Ablauf der neuen Ruhezeit");
 }
 
 static void test_motionResetsTheTimer() {
@@ -88,55 +140,30 @@ static void test_goToSleepComesOnce() {
           "GoToSleep kommt mehrfach ohne zwischenzeitliches wake()");
 }
 
-static void test_settlingWindowAfterWake() {
-    SleepPolicy p;
-    uint32_t now = 1000;
-    run(p, false, 0.f, now, 65000);
-    p.wake(now);
-    CHECK(p.settling(), "nach dem Aufwachen wird nicht eingeschwungen");
-    // Knapp vor settleMs (1500) darf noch nichts kommen, knapp danach muss es.
-    CHECK(run(p, false, 100.f, now, 1400) == SleepEvent::None,
-          "Settled kommt zu frueh");
-    CHECK(p.settling(), "das Einschwingfenster endet zu frueh");
-    CHECK(run(p, false, 100.f, now, 200) == SleepEvent::Settled,
-          "Settled kommt gar nicht");
-    CHECK(!p.settling(), "settling() bleibt nach Settled stehen");
-}
-
-static void test_settledComesOnce() {
-    SleepPolicy p;
-    uint32_t now = 1000;
-    run(p, false, 0.f, now, 65000);
-    p.wake(now);
-    run(p, false, 100.f, now, 1600);                      // Settled
-    CHECK(run(p, false, 100.f, now, 1600) == SleepEvent::None,
-          "Settled kommt mehrfach");
-}
-
 // Nach dem Aufwachen laeuft der Zeitgeber neu an - sonst schliefe das Geraet
 // unmittelbar nach dem Wecken wieder ein.
-//
-// Geprueft wird "kein GoToSleep" und nicht "None": in den ersten 1500 ms nach
-// dem Aufwachen kommt zwangslaeufig das Settled-Ereignis, und run() liefert
-// das zuletzt gesehene zurueck.
 static void test_timerRestartsAfterWake() {
     SleepPolicy p;
     uint32_t now = 1000;
     run(p, false, 0.f, now, 65000);
     p.wake(now);
-    CHECK(run(p, false, 0.f, now, 30000) != SleepEvent::GoToSleep,
+    CHECK(run(p, false, 0.f, now, 30000) == SleepEvent::None,
           "schlaeft direkt nach dem Aufwachen wieder ein");
+    CHECK(run(p, false, 0.f, now, 35000) == SleepEvent::GoToSleep,
+          "schlaeft nach dem Aufwachen gar nicht mehr");
 }
 
 int main() {
     test_sleepsAfterQuietTime();
     test_neverSleepsWhileMouseOn();
+    test_switchesOffAfterLongStillness();
+    test_motionKeepsItOn();
+    test_sleepFollowsPowerOffWithDelay();
+    test_powerOffComesOnce();
     test_motionResetsTheTimer();
     test_smallMotionCountsAsQuiet();
     test_wantsSleepLatchesUntilWake();
     test_goToSleepComesOnce();
-    test_settlingWindowAfterWake();
-    test_settledComesOnce();
     test_timerRestartsAfterWake();
 
     std::printf("%d Pruefungen, %d Fehler\n", checks, failures);

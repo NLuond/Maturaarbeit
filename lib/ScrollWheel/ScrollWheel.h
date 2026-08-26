@@ -11,7 +11,7 @@
 struct ScrollTuning {
     // Pixel je Radschritt. Gross genug, dass eine ruhig gehaltene Hand nicht
     // von selbst scrollt - die Totzone des Zeigers greift hier nicht mehr.
-    float    pxPerStep  = 40.f;
+    float    pxPerStep  = 60.f;
 
     float    maxPerTick = 8.f;    // Obergrenze je Ausgabe, gegen Spruenge
     float    invert     = 1.f;    // -1.f dreht die Richtung um

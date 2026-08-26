@@ -12,6 +12,28 @@ public:
 
     void setBeta(float b) { beta_ = b; }
 
+    // Setzt die Lage direkt aus einem Messwert des Beschleunigungssensors,
+    // statt sie aus der Flach-Annahme einlaufen zu lassen. Im Ruhezustand zeigt
+    // dieser Vektor nach oben und legt die Lage bis auf die Drehung um die
+    // Lotrechte fest - die ist ohne Magnetometer ohnehin nicht beobachtbar und
+    // wird von upX/upY/upZ auch nicht gelesen.
+    void seedFromAccel(float ax, float ay, float az) {
+        const float n2 = ax*ax + ay*ay + az*az;
+        if (n2 < 1e-8f) return;            // kein brauchbarer Messwert
+        const float rn = 1.f / sqrtf(n2);
+        ax *= rn; ay *= rn; az *= rn;
+
+        // Kuerzeste Drehung, die "oben" von der Z-Achse auf den gemessenen
+        // Vektor bringt. Fuer normierte Eingaben ist die Laenge 2*(1+az), die
+        // Achse also nur bei az = -1 unbestimmt - dort tut es jede quer dazu.
+        float q0 = 1.f + az, q1 = ay, q2 = -ax;
+        const float qn2 = q0*q0 + q1*q1 + q2*q2;
+        if (qn2 < 1e-9f) { q0 = 0.f; q1 = 1.f; q2 = 0.f; }
+        else { const float r = 1.f / sqrtf(qn2); q0 *= r; q1 *= r; q2 *= r; }
+
+        q_[0] = q0; q_[1] = q1; q_[2] = q2; q_[3] = 0.f;
+    }
+
     void update(float Gx, float Gy, float Gz, float Ax, float Ay, float Az, float dt) {
         static const float D2R = 0.017453293f;
         Gx *= D2R; Gy *= D2R; Gz *= D2R;

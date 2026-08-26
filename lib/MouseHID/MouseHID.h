@@ -65,7 +65,7 @@ public:
     // hier wieder eingefangen wird.
     //
     // Hoechstens einmal je CHECK_MS: meldet isRunning() nur kurz false, wuerde
-    // das Advertising sonst 209-mal je Sekunde neu gestartet und kaeme nie zur
+    // das Advertising sonst 208-mal je Sekunde neu gestartet und kaeme nie zur
     // Ruhe.
     void ensureAdvertising(uint32_t now_ms) {
         if (now_ms - tCheck_ < CHECK_MS) return;
@@ -105,14 +105,21 @@ public:
         return (uint32_t)c->getConnectionInterval() * 1250u;
     }
 
-    // Im Ruhezustand waere der Funk der groesste verbleibende Verbraucher -
-    // abgeschaltet ist das Geraet aber unauffindbar. Mit BLE_ALWAYS_ON bleibt
-    // er an.
+    // Im Ruhezustand ist das WERBEN der groesste verbleibende Verbraucher: es
+    // laeuft wegen setFastTimeout(0) durchgehend alle 20 ms auf drei Kanaelen.
+    // Genau das ist der Fall, den es zu vermeiden gilt - nachts, wenn der Host
+    // aus ist, wirbt das Geraet sonst bis zum leeren Akku.
+    //
+    // Eine BESTEHENDE Verbindung wird dagegen nicht getrennt. Sie kostet im
+    // Schlaf kaum etwas (ein leeres Paket je Verbindungsintervall, ein Kanal),
+    // und ein Neuaufbau handelt das Verbindungsintervall neu aus - Windows
+    // beantwortet das bei HID-Geraeten gern mit 30 ms. Daran haengt ueber
+    // moveIntervalUs() direkt die Berichtsrate der Bewegung, ein Neuaufbau
+    // macht den Cursor also fuer den Rest der Sitzung ruckelig.
     void radioOff() {
     #if !BLE_ALWAYS_ON
         Bluefruit.Advertising.restartOnDisconnect(false);
         Bluefruit.Advertising.stop();
-        if (Bluefruit.connected()) Bluefruit.disconnect(Bluefruit.connHandle());
     #endif
     }
 

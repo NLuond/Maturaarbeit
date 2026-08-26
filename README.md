@@ -180,6 +180,7 @@ und damit auf dem PC testbar.
 |---|---|
 | **[docs/Programmcode.md](docs/Programmcode.md)** | Aufbau und Funktionsweise ausführlich, mit den Begründungen hinter den Entscheidungen |
 | [docs/EdgeImpulse.md](docs/EdgeImpulse.md) | Anleitung, wie das Klassifikationsmodell aufgenommen und trainiert wird |
+| [docs/Aufnehmen.md](docs/Aufnehmen.md) | Kurzanleitung für den Aufnahmetag: Aufnahme über Bluetooth, Schritt für Schritt |
 | [include/config.h](include/config.h) | alle Einstellwerte, nach Themen gruppiert, mit Einheit und Begründung |
 | [TODO.md](TODO.md) | laufendes Arbeitsjournal: offene Messungen und Entscheide |
 | [CLAUDE.md](CLAUDE.md) | Kurzfassung der Projektregeln für die Arbeit am Code |

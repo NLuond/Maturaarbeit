@@ -22,7 +22,7 @@ struct PinchTuning {
     uint32_t armMs        = 250;
 
     // Nur jeder n-te Takt des Fensters wird klassifiziert; eine Inferenz dauert
-    // rund 3 ms von 4785 us Taktbudget.
+    // rund 3 ms von 4808 us Taktbudget.
     uint8_t  mlStride     = 2;
 
     float    gyroGuardDps = 100.f;   // darueber gilt es als Bewegung, nicht als Pinch

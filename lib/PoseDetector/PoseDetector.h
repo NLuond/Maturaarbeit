@@ -8,9 +8,9 @@
 // links oder rechts meint und ob eine Bewegung den Cursor fuehrt oder scrollt.
 // Idle entsteht allein aus dem Neigungs-Gate und ist keine Zone der Verdrehung.
 //
-// Zwei Gates: das enge, symmetrische level() ist Voraussetzung der
-// Ein/Aus-Drehgeste (TwistToggle liest es), das weite und asymmetrische
-// poseUp/poseDown entscheidet ueber Idle. Im Scroll-Modus (holdTurned) gilt
+// Zwei Gates: das enge, symmetrische level() liest TwistToggle beim START der
+// Ein/Aus-Geste - es beantwortet, ob die Maus gerade waagrecht benutzt wird. Das
+// weite und asymmetrische poseUp/poseDown entscheidet ueber Idle. Im Scroll-Modus (holdTurned) gilt
 // letzteres nicht - Scrollen heisst gerade, den Arm zu neigen.
 //
 // Ohne config.h und ohne Arduino.h, damit der PC-Test laeuft; die Werte stehen
@@ -20,7 +20,7 @@ struct PoseTuning {
     float    turnOnDeg       = 70.f;   // ab hier gilt die Hand als abgedreht
     float    turnOffDeg      = 55.f;   // erst hier wieder als gerade
 
-    float    levelMaxDeg     = 50.f;   // Waagrecht-Gate der Geste, Grad
+    float    levelMaxDeg     = 30.f;   // Waagrecht-Gate der Geste, Grad
     float    levelHystDeg    =  8.f;   // Hysterese beider Gates
 
     // Neigungs-Gate der Haltung. Weiter als levelMaxDeg, weil die Verdrehung
