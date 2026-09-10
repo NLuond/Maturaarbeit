@@ -32,7 +32,7 @@
 
 // ML-Klassifikator gegen reine Schwellwert-Erkennung: auf false entscheidet
 // allein das env-Gate.
-#define USE_ML_PINCH    false
+#define USE_ML_PINCH    true
 
 // BLE (bluefruit) gegen USB-HID (TinyUSB). Im USB-Zweig sind radioOff()/
 // radioOn() leere Huellen - dort ist keine Strommessung sinnvoll.
