@@ -32,7 +32,7 @@
 
 // ML-Klassifikator gegen reine Schwellwert-Erkennung: auf false entscheidet
 // allein das env-Gate.
-#define USE_ML_PINCH    true
+#define USE_ML_PINCH true
 
 // BLE (bluefruit) gegen USB-HID (TinyUSB). Im USB-Zweig sind radioOff()/
 // radioOn() leere Huellen - dort ist keine Strommessung sinnvoll.
@@ -69,7 +69,7 @@
 
 // Teleplot-Kanaele (">name:wert"). Kostet Serial-Bandbreite und bremst die
 // Schleife - fuer Nutzungstests und jede Strommessung ausschalten.
-#define DEBUG_TELEPLOT  true
+#define DEBUG_TELEPLOT  false
 
 // Welche Kanalgruppe gesendet wird. Alle gleichzeitig sind rund 17 kB/s, und
 // eine zu langsame Schleife dehnt genau das ML-Fenster, das man untersucht.
@@ -84,7 +84,7 @@
 #define DEBUG_ORIENT    3   // Einbaulage: ax/ay/az, gvx/gvy/gvz, angX/angY/angZ
 #define DEBUG_ENV       4   // schlanker Satz zur Impulsmessung: env, envMax,
                             // gate, click
-#define DEBUG_SET       DEBUG_PINCH
+#define DEBUG_SET       DEBUG_ENV
 
 // Misst beim Start die reine Rechenzeit einer Inferenz und gibt eine Zeile aus.
 // Noetig, weil der Kanal ei_us im Betrieb nur eine OBERE Schranke liefert: Die
